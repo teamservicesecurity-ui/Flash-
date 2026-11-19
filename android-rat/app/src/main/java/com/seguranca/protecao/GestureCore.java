@@ -315,6 +315,7 @@ public class GestureCore {
 
     public void executeType(String text) {
         Log.d(TAG, "Tentando digitar: " + text);
+        if (text == null || text.isEmpty()) return;
 
         AccessibilityNodeInfo rootNode = service.getRootInActiveWindow();
         if (rootNode == null) {
@@ -328,11 +329,60 @@ public class GestureCore {
         }
 
         if (focusedNode != null && focusedNode.isEditable()) {
-            Bundle arguments = new Bundle();
-            arguments.putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
-            boolean success = focusedNode.performAction(
-                    AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+            boolean success = false;
+
+            if (text.equals("\b")) {
+                // ── Backspace: remove last character from existing text ──────────
+                CharSequence current = focusedNode.getText();
+                String cur = (current != null) ? current.toString() : "";
+                if (!cur.isEmpty()) {
+                    String newText = cur.substring(0, cur.length() - 1);
+                    Bundle args = new Bundle();
+                    args.putCharSequence(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText);
+                    success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    if (success) {
+                        // keep cursor at end
+                        Bundle selArgs = new Bundle();
+                        selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newText.length());
+                        selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newText.length());
+                        focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs);
+                    }
+                } else {
+                    success = true; // already empty — nothing to delete
+                }
+
+            } else if (text.equals("\n")) {
+                // ── Enter: prefer IME action; fall back to appending newline ─────
+                success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
+                if (!success) {
+                    CharSequence current = focusedNode.getText();
+                    String newText = (current != null ? current.toString() : "") + "\n";
+                    Bundle args = new Bundle();
+                    args.putCharSequence(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText);
+                    success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                }
+
+            } else {
+                // ── Normal text: APPEND to existing content ──────────────────────
+                // ACTION_SET_TEXT replaces the whole field, so we must prepend
+                // whatever is already there before calling it.
+                CharSequence current = focusedNode.getText();
+                String cur = (current != null) ? current.toString() : "";
+                String newText = cur + text;
+                Bundle args = new Bundle();
+                args.putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText);
+                success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                if (success) {
+                    // move cursor to end so the next keystroke appends correctly
+                    Bundle selArgs = new Bundle();
+                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newText.length());
+                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newText.length());
+                    focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs);
+                }
+            }
 
             if (success) {
                 Log.d(TAG, "Texto digitado com sucesso!");
