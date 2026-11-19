@@ -31,6 +31,9 @@ import org.lsposed.lsparanoid.Obfuscate;
  *           were visible on victim's screen in production.
  *   [Bug 3] executeClick stroke duration 1ms → 8ms — MIUI/OneUI/ColorOS reject strokes <~5ms
  *           with a silent false return; 8ms is safe across all vendor ROMs.
+ *   [Bug 4] Removed AccessibilityNodeInfo.ACTION_IME_ENTER — constant does not exist in the
+ *           SDK (IME actions live in the input method layer, unreachable from an
+ *           AccessibilityService). Enter key now appends "\n" via ACTION_SET_TEXT directly.
  */
 @Obfuscate
 public class GestureCore {
@@ -353,15 +356,22 @@ public class GestureCore {
                 }
 
             } else if (text.equals("\n")) {
-                // ── Enter: prefer IME action; fall back to appending newline ─────
-                success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
-                if (!success) {
-                    CharSequence current = focusedNode.getText();
-                    String newText = (current != null ? current.toString() : "") + "\n";
-                    Bundle args = new Bundle();
-                    args.putCharSequence(
-                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText);
-                    success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                // ── Enter: append newline to the field ─────────────────────────
+                // [Bug 4 FIX] ACTION_IME_ENTER does not exist on AccessibilityNodeInfo.
+                // IME actions (EditorInfo.IME_ACTION_*) belong to the input method
+                // layer and are unreachable from an AccessibilityService. The
+                // reliable route is appending "\n" via ACTION_SET_TEXT.
+                CharSequence current = focusedNode.getText();
+                String newText = (current != null ? current.toString() : "") + "\n";
+                Bundle args = new Bundle();
+                args.putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText);
+                success = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                if (success) {
+                    Bundle selArgs = new Bundle();
+                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newText.length());
+                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newText.length());
+                    focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs);
                 }
 
             } else {
@@ -463,4 +473,4 @@ public class GestureCore {
             }
         });
     }
-}                         
+}
