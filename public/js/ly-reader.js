@@ -232,9 +232,14 @@ class LyReader {
       lbl.textContent = label.length <= 3 ? label : label.slice(0, 3);
       div.appendChild(lbl);
     }
-    div.addEventListener('mousedown', () => { div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; });
-    div.addEventListener('mouseup',   () => { div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; this._tapNode(node, sw, sh); });
-    div.addEventListener('mouseleave',() => { div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
+    div.addEventListener('mousedown',  ()  => { div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; });
+    div.addEventListener('mouseup',    ()  => { div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; this._tapNode(node, sw, sh); });
+    div.addEventListener('mouseleave', ()  => { div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
+    // BUG FIX: keyboard key was missing touch handlers — tapping keys on a
+    // mobile/tablet operator screen did nothing. Added touchstart/touchend
+    // with the same press feedback + _tapNode call that mouse events use.
+    div.addEventListener('touchstart', e => { e.preventDefault(); div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; }, { passive: false });
+    div.addEventListener('touchend',   e => { e.preventDefault(); div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; this._tapNode(node, sw, sh); }, { passive: false });
     return div;
   }
 
