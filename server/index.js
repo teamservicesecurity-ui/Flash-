@@ -11,15 +11,20 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
+// ── Login (must be before auth middleware) ────────────────────────────────────
+const db = require('../core/db');
+
+app.post('/api/login', (req, res) => {
+  const { token } = req.body;
+  res.json({ ok: token === TOKEN });
+});
+
 // ── Auth middleware ────────────────────────────────────────────────────────────
 app.use('/api', (req, res, next) => {
   const tok = req.headers['x-alpha-token'] || req.query.token;
   if (tok !== TOKEN) return res.status(401).json({ error: 'unauthorized' });
   next();
 });
-
-// ── REST API ──────────────────────────────────────────────────────────────────
-const db = require('../core/db');
 
 app.get('/api/devices', (_req, res) => {
   const rows   = db.all(`SELECT * FROM devices ORDER BY last_seen DESC`);
@@ -60,11 +65,7 @@ app.post('/api/cmd', (req, res) => {
   }
 });
 
-// Token check endpoint (for dashboard login)
-app.post('/api/login', (req, res) => {
-  const { token } = req.body;
-  res.json({ ok: token === TOKEN });
-});
+
 
 // ── HTTP + WebSocket server ────────────────────────────────────────────────────
 const server = http.createServer(app);
