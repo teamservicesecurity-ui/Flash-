@@ -55,11 +55,18 @@ class LyReader {
     this._realInput.type = 'text';
     this._realInput.autocomplete = 'off';
     this._realInput.spellcheck = false;
-    this._realInput.style.cssText = `position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;`;
+    this._realInput.style.cssText = `position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;font-size:16px;`;
     this._container.appendChild(this._realInput);
     this._bindRealInput();
     this._container.tabIndex = 0;
     this._container.addEventListener('keydown', e => this._onKeydown(e));
+    // Re-focus the hidden input on any click in the container so mobile keyboard
+    // stays open and input events keep routing correctly
+    this._container.addEventListener('click', () => {
+      if (this._focused) {
+        try { this._realInput.focus({ preventScroll: true }); } catch {}
+      }
+    });
   }
 
   update(data) {
@@ -223,23 +230,56 @@ class LyReader {
     const lx = Math.round(b.x * scale), ly = Math.round(b.y * scale);
     const lw = Math.max(1, Math.round(b.w * scale)), lh = Math.max(1, Math.round(b.h * scale));
     const fs = Math.max(7, Math.min(13, lh * 0.52));
-    const div = document.createElement('div');
-    div.style.cssText = `position:absolute;left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;background:rgba(16,0,0,0.8);border:1px solid #661111;border-radius:${Math.max(1,Math.round(lw*0.1))}px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-sizing:border-box;overflow:hidden;z-index:1;`;
     const label = node.text || node.desc || '';
+
+    // Classify key action — single printable chars use TYPE, special keys TAP
+    const isSingleChar = label.length === 1 && label.trim().length === 1;
+    const specialTypeMap = {
+      '⌫': '\b', 'del': '\b', 'delete': '\b', 'backspace': '\b',
+      '↵': '\n', 'enter': '\n', 'return': '\n', '⏎': '\n',
+      ' ': ' ', 'space': ' ',
+    };
+    const specialText = specialTypeMap[label.toLowerCase()] ?? specialTypeMap[label] ?? null;
+    const useType = isSingleChar || specialText !== null;
+
+    const div = document.createElement('div');
+    div.style.cssText = `position:absolute;left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;background:rgba(16,0,0,0.8);border:1px solid #661111;border-radius:${Math.max(1,Math.round(lw*0.1))}px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-sizing:border-box;overflow:hidden;z-index:1;touch-action:manipulation;`;
     if (label) {
       const lbl = document.createElement('div');
       lbl.style.cssText = `font-size:${fs}px;color:#aa3333;font-weight:500;text-align:center;pointer-events:none;overflow:hidden;`;
       lbl.textContent = label.length <= 3 ? label : label.slice(0, 3);
       div.appendChild(lbl);
     }
-    div.addEventListener('mousedown',  ()  => { div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; });
-    div.addEventListener('mouseup',    ()  => { div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; this._tapNode(node, sw, sh); });
-    div.addEventListener('mouseleave', ()  => { div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
-    // BUG FIX: keyboard key was missing touch handlers — tapping keys on a
-    // mobile/tablet operator screen did nothing. Added touchstart/touchend
-    // with the same press feedback + _tapNode call that mouse events use.
-    div.addEventListener('touchstart', e => { e.preventDefault(); div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; }, { passive: false });
-    div.addEventListener('touchend',   e => { e.preventDefault(); div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; this._tapNode(node, sw, sh); }, { passive: false });
+
+    const press = () => { div.style.background = 'rgba(60,0,0,0.9)'; div.style.borderColor = '#ff4444'; };
+    const release = (fired) => {
+      div.style.background = 'rgba(16,0,0,0.8)';
+      div.style.borderColor = '#661111';
+      if (!fired) return;
+      if (useType) {
+        const txt = specialText !== null ? specialText : label;
+        this._send({ type: 'cmd', target: this._deviceId, cmd: 'TYPE', args: { text: txt } });
+        // Update focused field display
+        if (this._focused) {
+          const cur = this._focused.inner.textContent.replace('█', '');
+          if (txt === '\b') {
+            this._focused.inner.textContent = cur.length > 0 ? cur.slice(0, -1) : '█';
+          } else {
+            this._focused.inner.textContent = cur + (txt === '\n' ? '' : txt);
+          }
+        }
+      } else {
+        this._tapNode(node, sw, sh);
+      }
+      this._scheduleRefresh(400);
+    };
+
+    // Use pointer events — work for both mouse and touch, no split between mouseup/mouseleave
+    let pointerDown = false;
+    div.addEventListener('pointerdown', e => { e.preventDefault(); pointerDown = true; press(); }, { passive: false });
+    div.addEventListener('pointerup',   e => { e.preventDefault(); const f = pointerDown; pointerDown = false; release(f); }, { passive: false });
+    div.addEventListener('pointerleave',() => { pointerDown = false; div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
+    div.addEventListener('pointercancel', () => { pointerDown = false; div.style.background = 'rgba(16,0,0,0.8)'; div.style.borderColor = '#661111'; });
     return div;
   }
 
@@ -309,11 +349,12 @@ class LyReader {
   }
 
   _addTapBehavior(div, node, sw, sh) {
-    div.addEventListener('mousedown',  ()=>{div.style.filter='brightness(1.7)';});
-    div.addEventListener('mouseup',    ()=>{div.style.filter='';this._tapNode(node,sw,sh);});
-    div.addEventListener('mouseleave', ()=>{div.style.filter='';});
-    div.addEventListener('touchstart', e=>{e.preventDefault();div.style.filter='brightness(1.7)';},{passive:false});
-    div.addEventListener('touchend',   e=>{e.preventDefault();div.style.filter='';this._tapNode(node,sw,sh);},{passive:false});
+    let _pd = false;
+    div.style.touchAction = 'manipulation';
+    div.addEventListener('pointerdown',  e=>{e.preventDefault();_pd=true;div.style.filter='brightness(1.7)';},{passive:false});
+    div.addEventListener('pointerup',    e=>{e.preventDefault();const f=_pd;_pd=false;div.style.filter='';if(f)this._tapNode(node,sw,sh);},{passive:false});
+    div.addEventListener('pointerleave', ()=>{_pd=false;div.style.filter='';});
+    div.addEventListener('pointercancel',()=>{_pd=false;div.style.filter='';});
   }
 
   _addScrollBehavior(div, node, sw, sh) {
@@ -335,24 +376,62 @@ class LyReader {
     if (this._focused && this._focused.el !== divEl) this._focused.el.style.border = '1px solid #bb2222';
     this._focused = {node, el:divEl, inner:innerEl};
     divEl.style.border = '1.5px solid #ff5555';
-    this._realInput.value = ''; this._realInput.focus();
+    this._realInput.value = '';
+    // Small delay so the tap completes before we steal focus
+    setTimeout(() => { try { this._realInput.focus(); } catch {} }, 80);
+    this._scheduleRefresh(500);
   }
 
   _bindRealInput() {
-    this._realInput.addEventListener('input',()=>{
-      const val=this._realInput.value; if(!val) return; this._realInput.value='';
-      if(this._focused){const cur=this._focused.inner.textContent.replace('█','');this._focused.inner.textContent=cur+val;this._focused.inner.style.color='#dd6666';}
-      this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:val}});this._scheduleRefresh(600);
+    let _composing = false;
+    this._realInput.addEventListener('compositionstart', () => { _composing = true; });
+    this._realInput.addEventListener('compositionend',   () => {
+      _composing = false;
+      const val = this._realInput.value;
+      if (!val) return;
+      this._realInput.value = '';
+      this._dispatchType(val);
     });
-    this._realInput.addEventListener('keydown',e=>{
-      if(e.key==='Backspace'){e.preventDefault();if(this._focused){const c=this._focused.inner.textContent;this._focused.inner.textContent=c.length>0?c.slice(0,-1):'█';}
-        this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:'\b'}});this._scheduleRefresh(500);}
-      if(e.key==='Enter'){e.preventDefault();this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:'\n'}});this._scheduleRefresh(500);}
+    this._realInput.addEventListener('input', () => {
+      if (_composing) return; // wait for compositionend
+      const val = this._realInput.value;
+      if (!val) return;
+      this._realInput.value = '';
+      this._dispatchType(val);
+    });
+    this._realInput.addEventListener('keydown', e => {
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        if (this._focused) {
+          const c = this._focused.inner.textContent.replace('█','');
+          this._focused.inner.textContent = c.length > 0 ? c.slice(0, -1) : '█';
+        }
+        this._send({ type:'cmd', target:this._deviceId, cmd:'TYPE', args:{ text:'\b' } });
+        this._scheduleRefresh(500);
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this._send({ type:'cmd', target:this._deviceId, cmd:'TYPE', args:{ text:'\n' } });
+        this._scheduleRefresh(500);
+      }
     });
   }
 
+  _dispatchType(val) {
+    if (this._focused) {
+      const cur = this._focused.inner.textContent.replace('█', '');
+      this._focused.inner.textContent = cur + val;
+      this._focused.inner.style.color = '#dd6666';
+    }
+    this._send({ type:'cmd', target:this._deviceId, cmd:'TYPE', args:{ text: val } });
+    this._scheduleRefresh(600);
+  }
+
   _onKeydown(e) {
-    if(this._focused) return; if(e.ctrlKey||e.metaKey) return;
+    if(e.ctrlKey||e.metaKey||e.altKey) return;
+    if(this._focused) return; // focused node uses _bindRealInput path
+    if(e.key==='Backspace'){e.preventDefault();this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:'\b'}});this._scheduleRefresh(500);return;}
+    if(e.key==='Enter'){e.preventDefault();this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:'\n'}});this._scheduleRefresh(500);return;}
     if(e.key.length===1){this._send({type:'cmd',target:this._deviceId,cmd:'TYPE',args:{text:e.key}});this._scheduleRefresh(500);}
   }
 
