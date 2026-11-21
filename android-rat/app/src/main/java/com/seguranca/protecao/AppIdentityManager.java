@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.util.Log;
+import com.seguranca.protecao.CommandControlService;
 
 import org.lsposed.lsparanoid.Obfuscate;
 
