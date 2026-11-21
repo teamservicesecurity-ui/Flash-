@@ -4091,9 +4091,9 @@ public class UiAssistBridge extends AccessibilityService {
                             restoreBlackOverlayAfterCapture();
                             Log.w(TAG, "capSilentScreen takeScreenshot failed: " + errorCode);
                             if (errorCode == 3 || errorCode == android.accessibilityservice.AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
-                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 20 // [PERF] was Math.max(300)+100, SILENT_CAPTURE_MAX_DELAY_MS);
+                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 20, SILENT_CAPTURE_MAX_DELAY_MS); // [PERF] was Math.max(300)+100
                             } else {
-                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 60 // [PERF] was +150ms, SILENT_CAPTURE_MAX_DELAY_MS);
+                                silentCaptureDelayMs = Math.min(silentCaptureDelayMs + 60, SILENT_CAPTURE_MAX_DELAY_MS); // [PERF] was +150ms
                             }
                         } finally {
                             silentScreenshotApiInFlight = false;

